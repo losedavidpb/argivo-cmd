@@ -1,0 +1,144 @@
+#!/usr/bin/env bash
+#
+# argivo - interpreter for argivo scripts
+#
+# This script serves as a runtime interpreter that turns
+# shell functions defined in a user-provided script into CLI commands.
+
+set -Eeuo pipefail
+
+# Directory for argivo libraries
+argivo_lib="/usr/local/lib/argivo"
+
+# Libraries for argivo
+source "$argivo_lib/help.bash"
+source "$argivo_lib/properties.bash"
+
+# Check that a script was provided
+if (($# == 0)); then
+    echo "error: no script provided"
+    echo "usage: $0 <script> [args...]"
+    exit 1
+fi
+
+# Built-in version command
+if [[ "$1" == "--version" || "$1" == "-v" ]]; then
+    argivo::version
+    exit 0
+fi
+
+# Built-in about command
+if [[ "$1" == "--about" || "$1" == "-a" ]]; then
+    argivo::about
+    exit 0
+fi
+
+# Built-in help command
+if [[ "$1" == "--help" || "$1" == "-h" ]]; then
+    argivo::usage
+    exit 0
+fi
+
+script="$1"
+shift
+
+# Check that the script exists
+if [[ ! -f "$script" ]]; then
+    echo "error: script not found: $script"
+    exit 1
+fi
+
+# Check that the script is readable
+if [[ ! -r "$script" ]]; then
+    echo "error: script is not readable: $script"
+    exit 1
+fi
+
+# Load the script the user wants to run
+# shellcheck source=/dev/null
+source "$script"
+
+# Load command metadata
+argivo::load_annotations
+
+# If no command is provided, execute main if it exists
+if (($# == 0)); then
+    if declare -F main >/dev/null; then
+        main
+        exit 0
+    fi
+
+    echo "error: no command provided"
+    exit 1
+fi
+
+# Process the command-line arguments to determine
+# which command to execute
+while (($# > 0)); do
+    # If the first argument is not a command,
+    # execute main with all remaining arguments
+    if [[ ! "$1" =~ ^- ]]; then
+        if declare -F main >/dev/null; then
+            main "$@"
+            exit 0
+        fi
+
+        echo "error: unexpected argument: $1"
+        exit 1
+    fi
+
+    # Commands cannot start with "--" yet
+    if [[ "$1" =~ ^-- ]]; then
+        echo "error: invalid command syntax: $1"
+        exit 1
+    fi
+
+    # Commands must be specified with a leading "-"
+    if [[ ! "$1" =~ ^-[a-zA-Z_][a-zA-Z0-9_]*$ ]]; then
+        echo "error: invalid command syntax: $1"
+        exit 1
+    fi
+
+    # Remove leading dashes from the command
+    # to be executed by argivo
+    cmd="${1#-}"
+    shift
+
+    # Built-in help command
+    if [[ "$cmd" == "h" ]]; then
+        argivo::help "$@"
+        exit 0
+    fi
+
+    # Check that the command exists
+    if ! declare -F "$cmd" >/dev/null; then
+        echo "error: unknown command: $cmd"
+        exit 1
+    fi
+
+    param_count=0
+
+    # Determine how many arguments the command expects
+    if [[ -n "${ARGIVO_PARAMS[$cmd]:-}" ]]; then
+        read -r -a params <<< "${ARGIVO_PARAMS[$cmd]}"
+        param_count="${#params[@]}"
+    fi
+
+    cmd_args=()
+
+    # Collect the arguments for the command based on
+    # the number of parameters it expects
+    for ((i = 0; i < param_count; i++)); do
+        if (($# == 0)); then
+            echo "error: missing arguments for command: $cmd"
+            echo "usage: $(basename "$script") $(argivo::usage "$cmd")"
+            exit 1
+        fi
+
+        cmd_args+=("$1")
+        shift
+    done
+
+    # Execute the command with its arguments
+    "$cmd" "${cmd_args[@]}"
+done
