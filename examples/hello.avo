@@ -1,0 +1,18 @@
+#!/usr/bin/env argivo
+# shellcheck shell=bash
+
+# @desc Example of a script that prints "Hello, world!"
+# when the "hello" command is executed.
+function main() {
+    hello "$@"
+}
+
+# @desc Print a greeting message for a user.
+# @param name Name of the user to greet.
+function hello() {
+    if (($# == 0)); then
+        echo "Hello, world!"
+    else
+        echo "Hello, $1"
+    fi
+}

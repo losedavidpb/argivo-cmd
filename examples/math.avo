@@ -1,0 +1,42 @@
+#!/usr/bin/env argivo
+# shellcheck shell=bash
+
+# @desc Basic mathematical operations.
+function main() {
+    echo "error: no command provided"
+    echo "usage: $0 <command> [args...]"
+    exit 1
+}
+
+# @desc Add two numbers and prints the result.
+# @param x First number.
+# @param y Second number.
+function sum() {
+    echo "$(($1 + $2))"
+}
+
+# @desc Subtract one number from another and prints the result.
+# @param x First number.
+# @param y Second number.
+function subtract() {
+    echo "$(($1 - $2))"
+}
+
+# @desc Multiply two numbers and print the result.
+# @param x First number.
+# @param y Second number.
+function multiply() {
+    echo "$(($1 * $2))"
+}
+
+# @desc Divide one number by another and print the result.
+# @param x Dividend.
+# @param y Divisor.
+function divide() {
+    if (($2 == 0)); then
+        echo "error: division by zero"
+        exit 1
+    fi
+
+    echo "$(($1 / $2))"
+}
