@@ -1,20 +1,11 @@
 #!/usr/bin/env bash
 #
 # checker.bash - checker script for argivo
-#
-# This script includes a lightweight command-line checker that
-# validates the syntax of an argivo script.
-#
-# The interpreter checks the following aspects of the script:
-#   - The script exists and is readable
-#   - The script does use the correct argivo shebang
-#   - All command names and aliases are valid and unique
-#   - The script defines a main function
 
 set -Eeuo pipefail
 
 # Check the syntax of an argivo script and its commands
-function argivo::check() {
+function _argivo::check() {
     if (($# == 0)); then
         echo "error: no script provided for checking"
         echo "usage: argivo --check <script>"
@@ -51,18 +42,18 @@ function argivo::check() {
     fi
 
     # Check that the script is a valid argivo script
-    if ! argivo::is_argivo_script "$script"; then
+    if ! _argivo::is_argivo_script "$script"; then
         exit 1
     fi
 
     # Check that all functions in the script have unique names
-    if ! argivo::check_commands "$script"; then
+    if ! _argivo::check_commands "$script"; then
         echo "error: duplicate functions found"
         exit 1
     fi
 
     # Check that all command aliases in the script have unique names
-    if ! argivo::check_aliases "$script"; then
+    if ! _argivo::check_aliases "$script"; then
         echo "error: duplicate command aliases found"
         exit 1
     fi
@@ -83,7 +74,7 @@ function argivo::check() {
 }
 
 # Check if a script is a valid argivo script
-function argivo::is_argivo_script() {
+function _argivo::is_argivo_script() {
     local script="$1"
 
     # Check for the presence of the argivo shebang
@@ -108,7 +99,7 @@ function argivo::is_argivo_script() {
 }
 
 # Check that all functions in the script have unique names
-function argivo::check_commands() {
+function _argivo::check_commands() {
     local script="$1"
 
     local duplicates
@@ -116,15 +107,14 @@ function argivo::check_commands() {
     duplicates="$(
         grep -E '^[[:space:]]*function[[:space:]]+[a-zA-Z_][a-zA-Z0-9_]*[[:space:]]*\(\)' "$script" |
         sed -E 's/^[[:space:]]*function[[:space:]]+([a-zA-Z_][a-zA-Z0-9_]*).*/\1/' |
-        sort |
-        uniq -d
+        sort | uniq -d
     )"
 
     [[ -z "$duplicates" ]]
 }
 
 # Check that all command aliases in the script have unique names
-function argivo::check_aliases() {
+function _argivo::check_aliases() {
     local script="$1"
 
     local duplicates

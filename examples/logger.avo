@@ -1,0 +1,36 @@
+#!/usr/bin/env argivo
+# shellcheck shell=bash
+
+# @desc Simulation of user access events with logging.
+function main() {
+    # Log file
+    local log_file="user_access.log"
+
+    # Number of simulated user access events
+    local num_users=5
+
+    # Simulate user access events
+    for ((i = 0; i < num_users; i++)); do
+        local user="user_account_$i"
+
+        argivo::info "Simulating login for $user"
+        argivo::log INFO "User '$user' logged in" "$log_file"
+
+        # Simulate some activity for the user before
+        # logging the account from the system
+        sleep 3
+
+        argivo::info "Simulating logout for $user"
+        argivo::log INFO "User '$user' logged out" "$log_file"
+
+        # Avoid immediate access to make the log more realistic
+        sleep 1
+    done
+
+    # Demonstrates that the log file contains
+    # all the logged events
+    clear; cat "$log_file"
+
+    # Clean up log file after simulation
+    rm "$log_file"
+}

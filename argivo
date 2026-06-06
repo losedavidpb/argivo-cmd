@@ -1,9 +1,6 @@
 #!/usr/bin/env bash
 #
 # argivo - interpreter for argivo scripts
-#
-# This script serves as a runtime interpreter that turns
-# shell functions defined in a user-provided script into CLI commands.
 
 set -Eeuo pipefail
 
@@ -14,93 +11,109 @@ if (($# == 0)); then
     exit 1
 fi
 
-# Directory for argivo libraries
-argivo_lib="/usr/local/lib/argivo"
+# Directories for argivo libraries
+_argivo_lib="/usr/local/lib/argivo"
+_argivo_public_lib="$_argivo_lib/public"
+_argivo_private_lib="$_argivo_lib/private"
 
 # Check library directory
-if [[ ! -d "$argivo_lib" ]]; then
-    echo "error: library directory not found: $argivo_lib" >&2
+if [[ ! -d "$_argivo_lib" ]]; then
+    echo "error: library directory not found: $_argivo_lib" >&2
     exit 1
 fi
 
-# Required libraries
-declare -a argivo_libraries=(
-    "annotations.bash"
-    "properties.bash"
-    "checker.bash"
-    "help.bash"
-)
+# Check public library directory
+if [[ ! -d "$_argivo_public_lib" ]]; then
+    echo "error: public library directory not found: $_argivo_public_lib" >&2
+    exit 1
+fi
 
-# Libraries for argivo
-for lib in "${argivo_libraries[@]}"; do
-    file="$argivo_lib/$lib"
+# Check private library directory
+if [[ ! -d "$_argivo_private_lib" ]]; then
+    echo "error: private library directory not found: $_argivo_private_lib" >&2
+    exit 1
+fi
 
-    if [[ ! -e "$file" ]]; then
-        echo "error: required library not found: $file" >&2
+# Load public libraries
+for _lib in "$_argivo_public_lib"/*.bash; do
+    if [[ -f "$_lib" && -r "$_lib" ]]; then
+        # shellcheck source=/dev/null
+        source "$_lib"
+    else
+        echo "error: $_lib not found or not readable" >&2
         exit 1
     fi
-
-    if [[ ! -r "$file" ]]; then
-        echo "error: library is not readable: $file" >&2
-        exit 1
-    fi
-
-    # shellcheck source=/dev/null
-    source "$file"
 done
 
 # The interpreter includes built-in commands
 # that can be used without a user script
 case "$1" in
     --version|-v)
-        argivo::version
+        # shellcheck source=/dev/null
+        source "$_argivo_private_lib/metadata.bash"
+        _argivo::version
         exit 0
         ;;
 
     --about|-a)
-        argivo::about
+        # shellcheck source=/dev/null
+        source "$_argivo_private_lib/metadata.bash"
+        _argivo::about
         exit 0
         ;;
 
     --help|-h)
-        argivo::help
+        # shellcheck source=/dev/null
+        source "$_argivo_private_lib/metadata.bash"
+        _argivo::help
         exit 0
         ;;
 
     --check|-c)
+        # shellcheck source=/dev/null
+        source "$_argivo_private_lib/checker.bash"
+
         shift
-        argivo::check "$@" --verbose
+        _argivo::check "$@" --verbose
         exit 0
         ;;
 esac
 
 # Get the script to be interpreted
-script="$1"
+_script="$1"
 shift
 
 # Check that the script exists
-if [[ ! -f "$script" ]]; then
-    echo "error: script not found: $script"
+if [[ ! -f "$_script" ]]; then
+    echo "error: script not found: $_script"
     exit 1
 fi
 
 # Check that the script is readable
-if [[ ! -r "$script" ]]; then
-    echo "error: script is not readable: $script"
+if [[ ! -r "$_script" ]]; then
+    echo "error: script is not readable: $_script"
     exit 1
 fi
 
-# Check that the script is a valid argivo script
-if ! argivo::check "$script"; then
-    exit 1
-fi
+(
+    # shellcheck source=/dev/null
+    source "$_argivo_private_lib/checker.bash"
+
+    # Check that the script is a valid argivo script
+    if ! _argivo::check "$_script"; then
+        exit 1
+    fi
+)
 
 # Load the script the user wants to run
 # shellcheck source=/dev/null
-source "$script"
+source "$_script"
+
+# shellcheck source=/dev/null
+source "$_argivo_private_lib/parser.bash"
 
 # Load command metadata
-argivo::load_annotations
+_argivo::load_annotations
 
 # If no command is provided, execute main if it exists
 if (($# == 0)); then
@@ -135,68 +148,77 @@ while (($# > 0)); do
     fi
 
     # Raw command to be executed
-    raw_cmd="$1"
+    _raw_cmd="$1"
     shift
 
     # Command is specified with "--", so we remove the
     # leading dashes to get the command name
-    if [[ "$raw_cmd" == --* ]]; then
-        cmd="${raw_cmd#--}"
+    if [[ "$_raw_cmd" == --* ]]; then
+        _cmd="${_raw_cmd#--}"
 
         # Built-in help command for user-defined commands
-        if [[ "$cmd" == "help" ]]; then
-            argivo::help_user "$@"
+        if [[ "$_cmd" == "help" ]]; then
+            # shellcheck source=/dev/null
+            source "$_argivo_private_lib/helper.bash"
+
+            _argivo::help_script "$@"
             exit 0
         fi
 
     # Command is specified with "-", so we treat it as an alias
     # in case it matches one of the defined aliases
-    elif [[ "$raw_cmd" == -* ]]; then
-        alias_name="${raw_cmd#-}"
+    elif [[ "$_raw_cmd" == -* ]]; then
+        _alias_name="${_raw_cmd#-}"
 
         # Built-in help command for user-defined commands
-        if [[ "$alias_name" == "h" ]]; then
-            argivo::help_user "$@"
+        if [[ "$_alias_name" == "h" ]]; then
+            # shellcheck source=/dev/null
+            source "$_argivo_private_lib/helper.bash"
+
+            _argivo::help_script "$@"
             exit 0
         fi
 
-        if [[ -n "${ARGIVO_ALIASES[$alias_name]:-}" ]]; then
-            cmd="${ARGIVO_ALIASES[$alias_name]}"
+        if [[ -n "${_ARGIVO_ALIASES[$_alias_name]:-}" ]]; then
+            _cmd="${_ARGIVO_ALIASES[$_alias_name]}"
         else
-            echo "error: unknown command alias: $alias_name"
+            echo "error: unknown command alias: $_alias_name"
             exit 1
         fi
     fi
 
     # Check that the command exists
-    if ! declare -F "$cmd" >/dev/null; then
-        echo "error: unknown command: $cmd"
+    if ! declare -F "$_cmd" >/dev/null; then
+        echo "error: unknown command: $_cmd"
         exit 1
     fi
 
-    param_count=0
+    _param_count=0
 
     # Determine how many arguments the command expects
-    if [[ -n "${ARGIVO_PARAMS[$cmd]:-}" ]]; then
-        read -r -a params <<< "${ARGIVO_PARAMS[$cmd]}"
-        param_count="${#params[@]}"
+    if [[ -n "${_ARGIVO_PARAMS[$_cmd]:-}" ]]; then
+        read -r -a _params <<< "${_ARGIVO_PARAMS[$_cmd]}"
+        _param_count="${#_params[@]}"
     fi
 
-    cmd_args=()
+    _cmd_args=()
 
     # Collect the arguments for the command based on
     # the number of parameters it expects
-    for ((i = 0; i < param_count; i++)); do
+    for ((i = 0; i < _param_count; i++)); do
         if (($# == 0)); then
-            echo "error: missing arguments for command: $cmd"
-            echo "usage: $(basename "$script") $(argivo::usage "$cmd")"
+            # shellcheck source=/dev/null
+            source "$_argivo_private_lib/helper.bash"
+
+            echo "error: missing arguments for command: $_cmd"
+            echo "usage: $(basename "$_script") $(_argivo::usage "$_cmd")"
             exit 1
         fi
 
-        cmd_args+=("$1")
+        _cmd_args+=("$1")
         shift
     done
 
     # Execute the command with its arguments
-    "$cmd" "${cmd_args[@]}"
+    "$_cmd" "${_cmd_args[@]}"
 done

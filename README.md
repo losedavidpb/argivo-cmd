@@ -8,6 +8,7 @@ Argivo turns Bash functions into documented command-line commands through a simp
 
 * Function-based commands
 * Declarative command metadata
+* Built-in standard library
 * Self-documenting scripts
 
 ## Example
@@ -36,7 +37,7 @@ Once the script is executable, it can be used directly as a command:
 ```bash
 ./hello.avo
 ./hello.avo -hello David
-./hello.avo -h
+./hello.avo --help
 ```
 
 No additional argument parsing, or help generation is required.

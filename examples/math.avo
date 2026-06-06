@@ -3,9 +3,7 @@
 
 # @desc Basic mathematical operations.
 function main() {
-    echo "error: no command provided"
-    echo "usage: $0 <command> [args...]"
-    exit 1
+    argivo::error "no command provided"
 }
 
 # @desc Add two numbers and prints the result.
@@ -34,8 +32,7 @@ function multiply() {
 # @param y Divisor.
 function divide() {
     if (($2 == 0)); then
-        echo "error: division by zero"
-        exit 1
+        argivo::error "division by zero"
     fi
 
     echo "$(($1 / $2))"

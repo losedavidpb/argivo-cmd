@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# properties.bash - general properties for argivo
+# metadata.bash - general properties for argivo
 
 set -Eeuo pipefail
 
@@ -46,20 +46,20 @@ ARGIVO_ABOUT="$(
 )"
 
 # Print the current version of argivo
-function argivo::version() {
+function _argivo::version() {
     echo "$ARGIVO_NAME $ARGIVO_VERSION"
 }
 
 # Print general information about argivo
-function argivo::about() {
+function _argivo::about() {
     echo "$ARGIVO_NAME ($ARGIVO_VERSION) - $ARGIVO_DESCRIPTION"
     echo
     echo "$ARGIVO_ABOUT"
 }
 
 # Print help information for a specific command
-function argivo::help() {
-    argivo::about
+function _argivo::help() {
+    _argivo::about
     echo
 
     # Show available commands for argivo

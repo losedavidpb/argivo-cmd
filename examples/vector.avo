@@ -3,9 +3,7 @@
 
 # @desc Basic vector operations.
 function main() {
-    echo "error: no command provided"
-    echo "usage: $0 <command> [args...]"
-    exit 1
+    argivo::error "no command provided"
 }
 
 # @desc Sum two 3D vectors and prints the result.
@@ -102,8 +100,7 @@ function vecdiv() {
     z2=$(_get_vec "$vec2" 2)
 
     if ((x2 == 0 || y2 == 0 || z2 == 0)); then
-        echo "error: division by zero"
-        return 1
+        argivo::error "division by zero"
     fi
 
     x_div=$((x1 / x2))

@@ -1,31 +1,31 @@
 #!/usr/bin/env bash
 #
-# annotations.bash - annotation script for argivo
+# parser.bash - parser script for argivo
 
 set -Eeuo pipefail
 
 # Check if annotations have already been loaded
 # shellcheck disable=SC2034
-ARGIVO_ANNOTATIONS_LOADED=false
+_ARGIVO_ANNOTATIONS_LOADED=false
 
 # Annotations for user-defined functions in the script
-declare -A ARGIVO_DESCRIPTIONS
-declare -A ARGIVO_PARAMS
-declare -A ARGIVO_PARAM_DESCRIPTIONS
-declare -A ARGIVO_ALIASES
-declare -A ARGIVO_EXAMPLES
+declare -A _ARGIVO_DESCRIPTIONS
+declare -A _ARGIVO_PARAMS
+declare -A _ARGIVO_PARAM_DESCRIPTIONS
+declare -A _ARGIVO_ALIASES
+declare -A _ARGIVO_EXAMPLES
 
 # Description of the script, if provided by the user
-declare ARGIVO_SCRIPT_DESCRIPTION=""
+declare _ARGIVO_SCRIPT_DESCRIPTION=""
 
-# Discover all user-defined commands excluding those that are
-# internal to argivo or defined as private
-function argivo::commands() {
-    declare -F | awk '{print $3}' | grep -v '^argivo::' | grep -v '^_' | grep -v '^main$' || true
-}
+# Load all annotations from the script
+function _argivo::load_annotations() {
+    # Annotations only need to be parsed once, as they are only used by
+    # internal commands that are cached after the first execution
+    if $_ARGIVO_ANNOTATIONS_LOADED; then
+        return
+    fi
 
-# Load all annotations from the script.
-function argivo::load_annotations() {
     local line
 
     # Temporary parameter descriptions for the current function
@@ -41,11 +41,7 @@ function argivo::load_annotations() {
     # Examples for the current function
     local curr_examples=()
 
-    # Script was already defined in argivo, so
-    # it is safe to use it here without checking for existence
     # shellcheck disable=SC2154
-    local _script="$script"
-
     while IFS= read -r line; do
         # Check for description comments in the form of:
         # @desc This is a description for a function
@@ -95,37 +91,37 @@ function argivo::load_annotations() {
 
             # Function description
             if [[ "$function_name" == "main" ]]; then
-                ARGIVO_SCRIPT_DESCRIPTION="$curr_descr"
+                _ARGIVO_SCRIPT_DESCRIPTION="$curr_descr"
             elif [[ -n "$curr_descr" ]]; then
                 # shellcheck disable=SC2034
-                ARGIVO_DESCRIPTIONS["$function_name"]="$curr_descr"
+                _ARGIVO_DESCRIPTIONS["$function_name"]="$curr_descr"
             fi
 
             # Function parameters
             if ((${#curr_params[@]} > 0)); then
                 # shellcheck disable=SC2034
-                ARGIVO_PARAMS["$function_name"]="${curr_params[*]}"
+                _ARGIVO_PARAMS["$function_name"]="${curr_params[*]}"
 
                 local param
 
                 # Parameter descriptions
                 for param in "${curr_params[@]}"; do
                     # shellcheck disable=SC2034
-                    ARGIVO_PARAM_DESCRIPTIONS["$function_name:$param"]="${curr_param_descriptions[$param]}"
+                    _ARGIVO_PARAM_DESCRIPTIONS["$function_name:$param"]="${curr_param_descriptions[$param]}"
                 done
             fi
 
             # Function alias
             if [[ -n "${curr_alias:-}" ]]; then
                 # shellcheck disable=SC2034
-                ARGIVO_ALIASES["$curr_alias"]="$function_name"
+                _ARGIVO_ALIASES["$curr_alias"]="$function_name"
                 curr_alias=""
             fi
 
             # Function examples
             if ((${#curr_examples[@]} > 0)); then
                 # shellcheck disable=SC2034
-                ARGIVO_EXAMPLES["$function_name"]="$(printf '%s\n' "${curr_examples[@]}")"
+                _ARGIVO_EXAMPLES["$function_name"]="$(printf '%s\n' "${curr_examples[@]}")"
             fi
 
             # Prepares the variables for the next function definition
@@ -136,16 +132,25 @@ function argivo::load_annotations() {
     done < "$_script"
 
     # Remove trailing newline from script description
-    ARGIVO_SCRIPT_DESCRIPTION="${ARGIVO_SCRIPT_DESCRIPTION%$'\n'}"
+    _ARGIVO_SCRIPT_DESCRIPTION="${_ARGIVO_SCRIPT_DESCRIPTION%$'\n'}"
+
+    # Mark annotations as loaded to avoid re-parsing the script
+    _ARGIVO_ANNOTATIONS_LOADED=true
+}
+
+# Discover all user-defined commands excluding those that are
+# internal to argivo or defined as private
+function _argivo::get_commands() {
+    declare -F | awk '{print $3}' | grep -v '^argivo::' | grep -v '^_' | grep -v '^main$' || true
 }
 
 # Get the alias of a given function, if it exists
-function argivo::get_alias() {
+function _argivo::get_alias() {
     local function_name="$1"
     local alias
 
-    for alias in "${!ARGIVO_ALIASES[@]}"; do
-        if [[ "${ARGIVO_ALIASES[$alias]}" == "$function_name" ]]; then
+    for alias in "${!_ARGIVO_ALIASES[@]}"; do
+        if [[ "${_ARGIVO_ALIASES[$alias]}" == "$function_name" ]]; then
             printf '%s\n' "$alias"
             return 0
         fi
