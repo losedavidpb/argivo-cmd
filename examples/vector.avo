@@ -1,0 +1,121 @@
+#!/usr/bin/env argivo
+# shellcheck shell=bash
+
+# @desc Basic vector operations.
+function main() {
+    echo "error: no command provided"
+    echo "usage: $0 <command> [args...]"
+    exit 1
+}
+
+# @desc Sum two 3D vectors and prints the result.
+# @param vec1 First vector  x, y, z.
+# @param vec2 Second vector  x, y, z.
+# @example "1, 2, 3" "4, 5, 6"
+# @example "2, -3, 5" "-4, 1, 1"
+# @alias vsum
+function vecsum() {
+    local vec1="$1"
+    local vec2="$2"
+
+    x1=$(_get_vec "$vec1" 0)
+    y1=$(_get_vec "$vec1" 1)
+    z1=$(_get_vec "$vec1" 2)
+
+    x2=$(_get_vec "$vec2" 0)
+    y2=$(_get_vec "$vec2" 1)
+    z2=$(_get_vec "$vec2" 2)
+
+    x_sum=$((x1 + x2))
+    y_sum=$((y1 + y2))
+    z_sum=$((z1 + z2))
+
+    echo "$x_sum, $y_sum, $z_sum"
+}
+
+# @desc Subtract two 3D vectors and prints the result.
+# @param vec1 First vector  x, y, z.
+# @param vec2 Second vector  x, y, z.
+# @example "1, 2, 3" "4, 5, 6"
+# @example "2, -3, 5" "-4, 1, 1"
+# @alias vsub
+function vecsub() {
+    local vec1="$1"
+    local vec2="$2"
+
+    x1=$(_get_vec "$vec1" 0)
+    y1=$(_get_vec "$vec1" 1)
+    z1=$(_get_vec "$vec1" 2)
+
+    x2=$(_get_vec "$vec2" 0)
+    y2=$(_get_vec "$vec2" 1)
+    z2=$(_get_vec "$vec2" 2)
+
+    x_sum=$((x1 - x2))
+    y_sum=$((y1 - y2))
+    z_sum=$((z1 - z2))
+
+    echo "$x_sum, $y_sum, $z_sum"
+}
+
+# @desc Multiply two 3D vectors and prints the result.
+# @param vec1 First vector x, y, z.
+# @param vec2 Second vector x, y, z.
+# @example "1, 2, 3" "4, 5, 6"
+# @example "2, -3, 5" "-4, 1, 1"
+# @alias vmul
+function vecmul() {
+    local vec1="$1"
+    local vec2="$2"
+
+    x1=$(_get_vec "$vec1" 0)
+    y1=$(_get_vec "$vec1" 1)
+    z1=$(_get_vec "$vec1" 2)
+
+    x2=$(_get_vec "$vec2" 0)
+    y2=$(_get_vec "$vec2" 1)
+    z2=$(_get_vec "$vec2" 2)
+
+    x_mul=$((x1 * x2))
+    y_mul=$((y1 * y2))
+    z_mul=$((z1 * z2))
+
+    echo "$x_mul, $y_mul, $z_mul"
+}
+
+# @desc Divide two 3D vectors and prints the result.
+# @param vec1 First vector x, y, z.
+# @param vec2 Second vector x, y, z.
+# @example "1, 2, 3" "4, 5, 6"
+# @example "2, -3, 5" "-4, 1, 1"
+# @alias vdiv
+function vecdiv() {
+    local vec1="$1"
+    local vec2="$2"
+
+    x1=$(_get_vec "$vec1" 0)
+    y1=$(_get_vec "$vec1" 1)
+    z1=$(_get_vec "$vec1" 2)
+
+    x2=$(_get_vec "$vec2" 0)
+    y2=$(_get_vec "$vec2" 1)
+    z2=$(_get_vec "$vec2" 2)
+
+    if ((x2 == 0 || y2 == 0 || z2 == 0)); then
+        echo "error: division by zero"
+        return 1
+    fi
+
+    x_div=$((x1 / x2))
+    y_div=$((y1 / y2))
+    z_div=$((z1 / z2))
+
+    echo "$x_div, $y_div, $z_div"
+}
+
+# Get the component of a vector given its index.
+function _get_vec() {
+    local IFS=','
+    read -ra v <<< "$1"
+    echo "${v[$2]}"
+}

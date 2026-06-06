@@ -2,120 +2,13 @@
 #
 # help.bash - help script for argivo
 #
-# This scripts provides a default "help" command for argivo scripts,
+# This script provides a default "help" command for argivo scripts,
 # which lists all available commands and their descriptions.
 
-# Check if annotations have already been loaded
-ARGIVO_ANNOTATIONS_LOADED=false
-
-# Annotations for user-defined functions in the script
-declare -A ARGIVO_DESCRIPTIONS
-declare -A ARGIVO_PARAMS
-declare -A ARGIVO_PARAM_DESCRIPTIONS
-
-# Description of the script, if provided by the user
-declare ARGIVO_SCRIPT_DESCRIPTION=""
-
-# Discover all user-defined commands excluding those that are
-# internal to argivo or defined as private
-function argivo::commands() {
-    declare -F | awk '{print $3}' | grep -v '^argivo::' | grep -v '^_' | grep -v '^main$' || true
-}
-
-# Load all annotations from the script.
-function argivo::load_annotations() {
-    local line
-
-    # Temporary parameter descriptions for the current function
-    declare -A curr_param_descriptions=()
-
-    # Function description and parameters
-    local curr_descr=""
-    local curr_params=()
-
-    # Script was already defined in argivo, so
-    # it is safe to use it here without checking for existence
-    # shellcheck disable=SC2154
-    local _script="$script"
-
-    while IFS= read -r line; do
-        # Check for description comments in the form of:
-        # @desc This is a description for a function
-        if [[ "$line" =~ ^[[:space:]]*#[[:space:]]*@desc[[:space:]]+(.*)$ ]]; then
-            curr_descr="${BASH_REMATCH[1]}"
-            continue
-        fi
-
-        # Check for parameter comments in the form of:
-        # @param name This is a description for a parameter
-        if [[ "$line" =~ ^[[:space:]]*#[[:space:]]*@param[[:space:]]+([a-zA-Z_][a-zA-Z0-9_]*)[[:space:]]+(.*)$ ]]; then
-            curr_params+=("${BASH_REMATCH[1]}")
-            curr_param_descriptions["${BASH_REMATCH[1]}"]="${BASH_REMATCH[2]}"
-            continue
-        fi
-
-        local function_name=""
-
-        # Check for function definitions that use the "function" keyword
-        if [[ "$line" =~ ^[[:space:]]*function[[:space:]]+([a-zA-Z_][a-zA-Z0-9_]*) ]]; then
-            function_name="${BASH_REMATCH[1]}"
-        fi
-
-        # Check for function definitions that do not use the "function" keyword
-        if [[ -z "$function_name" ]] &&
-           [[ "$line" =~ ^[[:space:]]*([a-zA-Z_][a-zA-Z0-9_]*)[[:space:]]*\(\) ]]; then
-            function_name="${BASH_REMATCH[1]}"
-        fi
-
-        # Associate the collected description and parameters
-        # of the current function with its name, if we found a function definition
-        if [[ -n "$function_name" ]]; then
-            # Function description
-            if [[ "$function_name" == "main" ]]; then
-                ARGIVO_SCRIPT_DESCRIPTION="$curr_descr"
-            elif [[ -n "$curr_descr" ]]; then
-                ARGIVO_DESCRIPTIONS["$function_name"]="$curr_descr"
-            fi
-
-            # Function parameters
-            if ((${#curr_params[@]} > 0)); then
-                ARGIVO_PARAMS["$function_name"]="${curr_params[*]}"
-
-                local param
-
-                # Parameter descriptions
-                for param in "${curr_params[@]}"; do
-                    ARGIVO_PARAM_DESCRIPTIONS["$function_name:$param"]="${curr_param_descriptions[$param]}"
-                done
-            fi
-
-            # Prepares the variables for the next function definition
-            curr_descr=""
-            curr_params=()
-        fi
-    done < "$_script"
-
-    # Remove trailing newline from script description
-    ARGIVO_SCRIPT_DESCRIPTION="${ARGIVO_SCRIPT_DESCRIPTION%$'\n'}"
-}
-
-# Generate usage string for a given command based on its parameters
-function argivo::usage() {
-    local command="$1"
-    local usage="-$command"
-
-    local param
-
-    # Add parameters to the usage string if they exist
-    for param in ${ARGIVO_PARAMS[$command]:-}; do
-        usage+=" [$param]"
-    done
-
-    printf '%s\n' "$usage"
-}
+set -Eeuo pipefail
 
 # Print help information for the user-defined commands
-function argivo::help() {
+function argivo::help_user() {
     local script_name
 
     # Script was already defined in argivo, so
@@ -148,21 +41,53 @@ function argivo::help() {
     done < <(argivo::commands)
 }
 
+# Generate usage string for a given command based on its parameters
+function argivo::usage() {
+    local command="$1"
+    local alias_cmd
+
+    local usage="--$command"
+
+    alias_cmd="$(argivo::get_alias "$command" 2>/dev/null || true)"
+
+    # Functions may not always have aliases
+    if [[ -n "$alias_cmd" ]]; then
+        usage="-$alias_cmd, --$command"
+    fi
+
+    local param
+
+    # Add parameters to the usage string if they exist
+    for param in ${ARGIVO_PARAMS[$command]:-}; do
+        usage+=" [$param]"
+    done
+
+    printf '%s\n' "$usage"
+}
+
 # Print detailed help information for a specific command
 function argivo::help_command() {
     local script_name="$1"
     local command="$2"
 
+    # Resolve aliases to their real function names
+    if [[ -n "${ARGIVO_ALIASES[$command]:-}" ]]; then
+        command="${ARGIVO_ALIASES[$command]}"
+    fi
+
+    # Check that the command exists
     if [[ -z "${ARGIVO_DESCRIPTIONS[$command]:-}" ]]; then
         echo "error: unknown command: $command"
         return 1
     fi
 
+    # Usage message
     echo "Usage: $script_name $(argivo::usage "$command")"
     echo "${ARGIVO_DESCRIPTIONS[$command]}"
-    echo
 
+    # Show parameters and their descriptions
     if [[ -n "${ARGIVO_PARAMS[$command]:-}" ]]; then
+        echo
         echo "Arguments:"
 
         local param
@@ -172,5 +97,20 @@ function argivo::help_command() {
                 "$param" \
                 "${ARGIVO_PARAM_DESCRIPTIONS["$command:$param"]:-}"
         done
+    fi
+
+    # Show examples for the command
+    if [[ -n "${ARGIVO_EXAMPLES[$command]:-}" ]]; then
+        echo
+        echo "Examples:"
+
+        while IFS= read -r example; do
+            [[ -z "$example" ]] && continue
+
+            printf "  %s %s %s\n" \
+                "$script_name" \
+                "$(argivo::usage "$command" | sed 's/ \[[^]]*\]//g')" \
+                "$example"
+        done <<< "${ARGIVO_EXAMPLES[$command]}"
     fi
 }

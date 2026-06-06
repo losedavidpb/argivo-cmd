@@ -39,7 +39,7 @@ Once the script is executable, it can be used directly as a command:
 ./hello.avo -h
 ```
 
-No additional boilerplate, argument parsing, or help generation is required.
+No additional argument parsing, or help generation is required.
 
 ## Installation
 

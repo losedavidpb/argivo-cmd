@@ -57,14 +57,15 @@ function argivo::about() {
     echo "$ARGIVO_ABOUT"
 }
 
-# Print usage information for a specific command
-function argivo::usage() {
+# Print help information for a specific command
+function argivo::help() {
     argivo::about
     echo
 
     # Show available commands for argivo
     echo "Available commands:"
-    printf "  %-12s %s\n" "--version" "Show version information"
-    printf "  %-12s %s\n" "--about"   "Show about information"
-    printf "  %-12s %s\n" "--help"    "Show help information"
+    printf "  %-12s %s\n" "-v, --version" "Show version information"
+    printf "  %-12s %s\n" "-a, --about"   "Show about information"
+    printf "  %-12s %s\n" "-h, --help"    "Show help information"
+    printf "  %-12s %s\n" "-c, --check"   "Validate command syntax"
 }

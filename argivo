@@ -7,38 +7,74 @@
 
 set -Eeuo pipefail
 
-# Directory for argivo libraries
-argivo_lib="/usr/local/lib/argivo"
-
-# Libraries for argivo
-source "$argivo_lib/help.bash"
-source "$argivo_lib/properties.bash"
-
-# Check that a script was provided
+# Check whether the user provided arguments
 if (($# == 0)); then
-    echo "error: no script provided"
-    echo "usage: $0 <script> [args...]"
+    echo "error: no arguments were provided" >&2
+    echo "usage: $0 <script> [args...]" >&2
     exit 1
 fi
 
-# Built-in version command
-if [[ "$1" == "--version" || "$1" == "-v" ]]; then
-    argivo::version
-    exit 0
+# Directory for argivo libraries
+argivo_lib="/usr/local/lib/argivo"
+
+# Check library directory
+if [[ ! -d "$argivo_lib" ]]; then
+    echo "error: library directory not found: $argivo_lib" >&2
+    exit 1
 fi
 
-# Built-in about command
-if [[ "$1" == "--about" || "$1" == "-a" ]]; then
-    argivo::about
-    exit 0
-fi
+# Required libraries
+declare -a argivo_libraries=(
+    "annotations.bash"
+    "properties.bash"
+    "checker.bash"
+    "help.bash"
+)
 
-# Built-in help command
-if [[ "$1" == "--help" || "$1" == "-h" ]]; then
-    argivo::usage
-    exit 0
-fi
+# Libraries for argivo
+for lib in "${argivo_libraries[@]}"; do
+    file="$argivo_lib/$lib"
 
+    if [[ ! -e "$file" ]]; then
+        echo "error: required library not found: $file" >&2
+        exit 1
+    fi
+
+    if [[ ! -r "$file" ]]; then
+        echo "error: library is not readable: $file" >&2
+        exit 1
+    fi
+
+    # shellcheck source=/dev/null
+    source "$file"
+done
+
+# The interpreter includes built-in commands
+# that can be used without a user script
+case "$1" in
+    --version|-v)
+        argivo::version
+        exit 0
+        ;;
+
+    --about|-a)
+        argivo::about
+        exit 0
+        ;;
+
+    --help|-h)
+        argivo::help
+        exit 0
+        ;;
+
+    --check|-c)
+        shift
+        argivo::check "$@" --verbose
+        exit 0
+        ;;
+esac
+
+# Get the script to be interpreted
 script="$1"
 shift
 
@@ -51,6 +87,11 @@ fi
 # Check that the script is readable
 if [[ ! -r "$script" ]]; then
     echo "error: script is not readable: $script"
+    exit 1
+fi
+
+# Check that the script is a valid argivo script
+if ! argivo::check "$script"; then
     exit 1
 fi
 
@@ -87,27 +128,44 @@ while (($# > 0)); do
         exit 1
     fi
 
-    # Commands cannot start with "--" yet
-    if [[ "$1" =~ ^-- ]]; then
+    # Commands must be specified with a leading "-" or "--"
+    if [[ ! "$1" =~ ^--?[a-zA-Z_][a-zA-Z0-9_]*$ ]]; then
         echo "error: invalid command syntax: $1"
         exit 1
     fi
 
-    # Commands must be specified with a leading "-"
-    if [[ ! "$1" =~ ^-[a-zA-Z_][a-zA-Z0-9_]*$ ]]; then
-        echo "error: invalid command syntax: $1"
-        exit 1
-    fi
-
-    # Remove leading dashes from the command
-    # to be executed by argivo
-    cmd="${1#-}"
+    # Raw command to be executed
+    raw_cmd="$1"
     shift
 
-    # Built-in help command
-    if [[ "$cmd" == "h" ]]; then
-        argivo::help "$@"
-        exit 0
+    # Command is specified with "--", so we remove the
+    # leading dashes to get the command name
+    if [[ "$raw_cmd" == --* ]]; then
+        cmd="${raw_cmd#--}"
+
+        # Built-in help command for user-defined commands
+        if [[ "$cmd" == "help" ]]; then
+            argivo::help_user "$@"
+            exit 0
+        fi
+
+    # Command is specified with "-", so we treat it as an alias
+    # in case it matches one of the defined aliases
+    elif [[ "$raw_cmd" == -* ]]; then
+        alias_name="${raw_cmd#-}"
+
+        # Built-in help command for user-defined commands
+        if [[ "$alias_name" == "h" ]]; then
+            argivo::help_user "$@"
+            exit 0
+        fi
+
+        if [[ -n "${ARGIVO_ALIASES[$alias_name]:-}" ]]; then
+            cmd="${ARGIVO_ALIASES[$alias_name]}"
+        else
+            echo "error: unknown command alias: $alias_name"
+            exit 1
+        fi
     fi
 
     # Check that the command exists
