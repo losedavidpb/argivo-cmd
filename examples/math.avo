@@ -1,39 +1,48 @@
 #!/usr/bin/env argivo
 # shellcheck shell=bash
 
-# @desc Basic mathematical operations.
+# @desc Basic mathematical operations
 function main() {
     argivo::error "no command provided"
 }
 
-# @desc Add two numbers and prints the result.
-# @param x First number.
-# @param y Second number.
+# @desc Add two numbers
+# @param x First number
+# @param y Second number
 function sum() {
+    argivo::is_number "$1" || return 1
+    argivo::is_number "$2" || return 1
+
     echo "$(($1 + $2))"
 }
 
-# @desc Subtract one number from another and prints the result.
-# @param x First number.
-# @param y Second number.
+# @desc Subtract one number from another
+# @param x First number
+# @param y Second number
 function subtract() {
+    argivo::is_number "$1" || return 1
+    argivo::is_number "$2" || return 1
+
     echo "$(($1 - $2))"
 }
 
-# @desc Multiply two numbers and print the result.
-# @param x First number.
-# @param y Second number.
+# @desc Multiply two numbers
+# @param x First number
+# @param y Second number
 function multiply() {
+    argivo::is_number "$1" || return 1
+    argivo::is_number "$2" || return 1
+
     echo "$(($1 * $2))"
 }
 
-# @desc Divide one number by another and print the result.
-# @param x Dividend.
-# @param y Divisor.
+# @desc Divide one number by another
+# @param x Dividend
+# @param y Divisor
 function divide() {
-    if (($2 == 0)); then
-        argivo::error "division by zero"
-    fi
+    argivo::is_number "$1" || return 1
+    argivo::is_number "$2" || return 1
+    (($2 == 0)) && return 1
 
     echo "$(($1 / $2))"
 }

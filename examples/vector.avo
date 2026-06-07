@@ -1,118 +1,110 @@
 #!/usr/bin/env argivo
 # shellcheck shell=bash
 
-# @desc Basic vector operations.
+# @desc Basic vector operations
 function main() {
     argivo::error "no command provided"
 }
 
-# @desc Sum two 3D vectors and prints the result.
-# @param vec1 First vector  x, y, z.
-# @param vec2 Second vector  x, y, z.
+# @desc Sum two 3D vectors
+# @param vec1 First vector
+# @param vec2 Second vector
 # @example "1, 2, 3" "4, 5, 6"
 # @example "2, -3, 5" "-4, 1, 1"
 # @alias vsum
 function vecsum() {
-    local vec1="$1"
-    local vec2="$2"
-
-    x1=$(_get_vec "$vec1" 0)
-    y1=$(_get_vec "$vec1" 1)
-    z1=$(_get_vec "$vec1" 2)
-
-    x2=$(_get_vec "$vec2" 0)
-    y2=$(_get_vec "$vec2" 1)
-    z2=$(_get_vec "$vec2" 2)
-
-    x_sum=$((x1 + x2))
-    y_sum=$((y1 + y2))
-    z_sum=$((z1 + z2))
-
-    echo "$x_sum, $y_sum, $z_sum"
+    _vecop + "$1" "$2"
 }
 
-# @desc Subtract two 3D vectors and prints the result.
-# @param vec1 First vector  x, y, z.
-# @param vec2 Second vector  x, y, z.
+# @desc Subtract two 3D vectors
+# @param vec1 First vector
+# @param vec2 Second vector
 # @example "1, 2, 3" "4, 5, 6"
 # @example "2, -3, 5" "-4, 1, 1"
 # @alias vsub
 function vecsub() {
-    local vec1="$1"
-    local vec2="$2"
-
-    x1=$(_get_vec "$vec1" 0)
-    y1=$(_get_vec "$vec1" 1)
-    z1=$(_get_vec "$vec1" 2)
-
-    x2=$(_get_vec "$vec2" 0)
-    y2=$(_get_vec "$vec2" 1)
-    z2=$(_get_vec "$vec2" 2)
-
-    x_sum=$((x1 - x2))
-    y_sum=$((y1 - y2))
-    z_sum=$((z1 - z2))
-
-    echo "$x_sum, $y_sum, $z_sum"
+    _vecop - "$1" "$2"
 }
 
-# @desc Multiply two 3D vectors and prints the result.
-# @param vec1 First vector x, y, z.
-# @param vec2 Second vector x, y, z.
+# @desc Multiply two 3D vectors
+# @param vec1 First vector
+# @param vec2 Second vector
 # @example "1, 2, 3" "4, 5, 6"
 # @example "2, -3, 5" "-4, 1, 1"
 # @alias vmul
 function vecmul() {
-    local vec1="$1"
-    local vec2="$2"
-
-    x1=$(_get_vec "$vec1" 0)
-    y1=$(_get_vec "$vec1" 1)
-    z1=$(_get_vec "$vec1" 2)
-
-    x2=$(_get_vec "$vec2" 0)
-    y2=$(_get_vec "$vec2" 1)
-    z2=$(_get_vec "$vec2" 2)
-
-    x_mul=$((x1 * x2))
-    y_mul=$((y1 * y2))
-    z_mul=$((z1 * z2))
-
-    echo "$x_mul, $y_mul, $z_mul"
+    _vecop '*' "$1" "$2"
 }
 
-# @desc Divide two 3D vectors and prints the result.
-# @param vec1 First vector x, y, z.
-# @param vec2 Second vector x, y, z.
+# @desc Divide two 3D vectors
+# @param vec1 First vector
+# @param vec2 Second vector
 # @example "1, 2, 3" "4, 5, 6"
 # @example "2, -3, 5" "-4, 1, 1"
 # @alias vdiv
 function vecdiv() {
-    local vec1="$1"
-    local vec2="$2"
-
-    x1=$(_get_vec "$vec1" 0)
-    y1=$(_get_vec "$vec1" 1)
-    z1=$(_get_vec "$vec1" 2)
-
-    x2=$(_get_vec "$vec2" 0)
-    y2=$(_get_vec "$vec2" 1)
-    z2=$(_get_vec "$vec2" 2)
-
-    if ((x2 == 0 || y2 == 0 || z2 == 0)); then
-        argivo::error "division by zero"
-    fi
-
-    x_div=$((x1 / x2))
-    y_div=$((y1 / y2))
-    z_div=$((z1 / z2))
-
-    echo "$x_div, $y_div, $z_div"
+    _vecop '/' "$1" "$2"
 }
 
-# Get the component of a vector given its index.
+# Perform a vector operation
+function _vecop() {
+    local op="$1"
+
+    local x1 y1 z1
+    local x2 y2 z2
+
+    # Read components of each vector
+    read -r x1 y1 z1 <<< "$(_read_vec "$2")"
+    read -r x2 y2 z2 <<< "$(_read_vec "$3")"
+
+    # Division does not admit zero values
+    if [ "$op" = "/" ]; then
+        ((x2 && y2 && z2)) || return 1
+    fi
+
+    # Perform the operation based on the operator
+    case "$op" in
+        +)      echo "$((x1 + x2)), $((y1 + y2)), $((z1 + z2))" ;;
+        -)      echo "$((x1 - x2)), $((y1 - y2)), $((z1 - z2))" ;;
+        '*')    echo "$((x1 * x2)), $((y1 * y2)), $((z1 * z2))" ;;
+        '/')    echo "$((x1 / x2)), $((y1 / y2)), $((z1 / z2))" ;;
+    esac
+}
+
+# Get the components of a vector
+function _read_vec() {
+    local vec="$1"
+
+    local x y z
+
+    x=$(_get_vec "$vec" 0)
+    y=$(_get_vec "$vec" 1)
+    z=$(_get_vec "$vec" 2)
+
+    _check_vec "$x" "$y" "$z"
+    printf '%s %s %s\n' "$x" "$y" "$z"
+}
+
+# Get the component of a vector
 function _get_vec() {
     local IFS=','
+    local v
+
     read -ra v <<< "$1"
-    echo "${v[$2]}"
+
+    [[ -v "v[$2]" ]] ||
+        argivo::error "invalid vector: '$1'"
+
+    printf '%s\n' "${v[$2]}"
+}
+
+# Check the components of a vector
+function _check_vec() {
+    local xyz
+
+    for xyz in "$@"; do
+        argivo::assert \
+            "invalid vector component: '$xyz'" \
+            argivo::is_number "$xyz"
+    done
 }

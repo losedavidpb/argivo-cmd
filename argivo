@@ -4,13 +4,6 @@
 
 set -Eeuo pipefail
 
-# Check whether the user provided arguments
-if (($# == 0)); then
-    echo "error: no arguments were provided" >&2
-    echo "usage: $0 <script> [args...]" >&2
-    exit 1
-fi
-
 # Directories for argivo libraries
 _argivo_lib="/usr/local/lib/argivo"
 _argivo_public_lib="$_argivo_lib/public"
@@ -44,6 +37,14 @@ for _lib in "$_argivo_public_lib"/*.bash; do
         exit 1
     fi
 done
+
+# Check whether the user provided arguments
+if (($# == 0)); then
+    # shellcheck source=/dev/null
+    source "$_argivo_private_lib/metadata.bash"
+    _argivo::help
+    exit 0
+fi
 
 # The interpreter includes built-in commands
 # that can be used without a user script
