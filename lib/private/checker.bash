@@ -58,6 +58,12 @@ function _argivo::check() {
         exit 1
     fi
 
+    # Check that all exclusions are defined once at each function
+    if ! _argivo::check_exclusions "$script"; then
+        echo "error: duplicate exclusions found at a function"
+        exit 1
+    fi
+
     # Show syntax validation results
     if [[ "$verbose" == "true" ]]; then
         echo
@@ -65,6 +71,7 @@ function _argivo::check() {
         echo "✓ Script is a valid argivo script"
         echo "✓ All command names are valid"
         echo "✓ All command aliases are unique"
+        echo "✓ All exclusions are unique at each function"
 
         echo
         echo "No issues found"
@@ -125,4 +132,35 @@ function _argivo::check_aliases() {
     )"
 
     [[ -z "$duplicates" ]]
+}
+
+# Check that all exclusions are defined once at each function
+function _argivo::check_exclusions() {
+    local script="$1"
+
+    local line
+    declare -A exclusions=()
+
+    while IFS= read -r line; do
+        # Reset exclusions for the new function
+        if [[ "$line" =~ ^[[:space:]]*(function[[:space:]]+)?[a-zA-Z_][a-zA-Z0-9_]*[[:space:]]*(\(\))? ]]; then
+            exclusions=()
+            continue
+        fi
+
+        # Check exclusions for current function
+        if [[ "$line" =~ ^[[:space:]]*#[[:space:]]*@excl[[:space:]]+([a-zA-Z_][a-zA-Z0-9_]*([[:space:]]+[a-zA-Z_][a-zA-Z0-9_]*)*)[[:space:]]*$ ]]; then
+            local group
+
+            for group in ${BASH_REMATCH[1]}; do
+                if [[ -n "${exclusions[$group]:-}" ]]; then
+                    return 1
+                fi
+
+                exclusions["$group"]=1
+            done
+        fi
+    done < "$script"
+
+    return 0
 }

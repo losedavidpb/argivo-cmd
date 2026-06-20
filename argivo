@@ -127,6 +127,13 @@ if (($# == 0)); then
     exit 1
 fi
 
+# Temporal variables to save commands, arguments
+# and exclusions before executing the script
+declare -A _executed_exclusions=()
+declare -a _planned_commands=()
+declare -a _planned_argc=()
+declare -a _planned_args=()
+
 # Process the command-line arguments to determine
 # which command to execute
 while (($# > 0)); do
@@ -220,6 +227,37 @@ while (($# > 0)); do
         shift
     done
 
-    # Execute the command with its arguments
+    # Check exclusion groups
+    for _group in ${_ARGIVO_FUNCTION_EXCLUSIONS[$_cmd]:-}; do
+        if [[ -n "${_executed_exclusions[$_group]:-}" ]]; then
+            echo "error: exclusion group conflict: $_group"
+            exit 1
+        fi
+
+        _executed_exclusions["$_group"]=1
+    done
+
+    _planned_commands+=("$_cmd")
+    _planned_argc+=("${#_cmd_args[@]}")
+
+    for _arg in "${_cmd_args[@]}"; do
+        _planned_args+=("$_arg")
+    done
+done
+
+_arg_index=0
+
+# Execute the commands with its arguments
+for ((i = 0; i < ${#_planned_commands[@]}; i++)); do
+    _cmd="${_planned_commands[$i]}"
+    _argc="${_planned_argc[$i]}"
+
+    _cmd_args=()
+
+    for ((j = 0; j < _argc; j++)); do
+        _cmd_args+=("${_planned_args[$_arg_index]}")
+        ((_arg_index += 1))
+    done
+
     "$_cmd" "${_cmd_args[@]}"
 done

@@ -1,0 +1,66 @@
+#!/usr/bin/env argivo
+# shellcheck shell=bash
+
+# Status of the network that specifies
+# whether the network is connected or not
+status=false
+
+# @desc Simulation of a network.
+function main() {
+    argivo::error "no command provided"
+}
+
+# @desc Displays the status of the network.
+# @alias s
+function status() {
+    if $status; then
+        echo "🟢 localhost is connected"
+    else
+        echo "🔴 localhost is disconnected"
+    fi
+}
+
+# @desc Connects the network.
+# @excl network
+# @alias c
+function connect() {
+    if ! $status; then
+        argivo::log INFO "Connecting the localhost ..."
+
+        # Simulate some work before the network
+        # is connected to the system
+        sleep 3
+
+        status=true
+        argivo::log INFO "Connection complete"
+    fi
+}
+
+# @desc Disconnects the network.
+# @excl network
+# @alias d
+function disconnect() {
+    if $status; then
+        argivo::log INFO "Disconnecting the localhost ..."
+
+        # Simulate some work before the network
+        # is connected to the system
+        sleep 3
+
+        status=false
+        argivo::log INFO "Disconnection complete"
+    fi
+}
+
+# @desc Restarts the network.
+# @excl network
+# @alias r
+function restart() {
+    # Since the network state is not persisted,
+    # pretend the connection is currently open
+    # so the restart sequence can disconnect it
+    status=true
+
+    disconnect
+    connect
+}

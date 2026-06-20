@@ -2,7 +2,7 @@
 # shellcheck shell=bash
 
 # @desc Simulates the execution of an application
-# @desc that logs its activity to a file.
+# that logs its activity to a file.
 function main() {
     local logfile="app.log"
 

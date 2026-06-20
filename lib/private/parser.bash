@@ -14,6 +14,7 @@ declare -A _ARGIVO_PARAMS
 declare -A _ARGIVO_PARAM_DESCRIPTIONS
 declare -A _ARGIVO_ALIASES
 declare -A _ARGIVO_EXAMPLES
+declare -A _ARGIVO_FUNCTION_EXCLUSIONS
 
 # Description of the script, if provided by the user
 declare _ARGIVO_SCRIPT_DESCRIPTION=""
@@ -31,15 +32,12 @@ function _argivo::load_annotations() {
     # Temporary parameter descriptions for the current function
     declare -A curr_param_descriptions=()
 
-    # Function description and parameters
+    # Current annotations for the current function
     local curr_descr=""
     local curr_params=()
-
-    # Alias for the current function
     local curr_alias=""
-
-    # Examples for the current function
     local curr_examples=()
+    local curr_exclusions=()
 
     # shellcheck disable=SC2154
     while IFS= read -r line; do
@@ -69,6 +67,14 @@ function _argivo::load_annotations() {
         # @alias alias_name
         if [[ "$line" =~ ^[[:space:]]*#[[:space:]]*@alias[[:space:]]+([a-zA-Z_][a-zA-Z0-9_]*)[[:space:]]*$ ]]; then
             curr_alias="${BASH_REMATCH[1]}"
+            continue
+        fi
+
+        # Check for exclusion comments in the form of:
+        # @excl exclusion_name
+        if [[ "$line" =~ ^[[:space:]]*#[[:space:]]*@excl[[:space:]]+([a-zA-Z_][a-zA-Z0-9_]*([[:space:]]+[a-zA-Z_][a-zA-Z0-9_]*)*)[[:space:]]*$ ]]; then
+            read -r -a exclusions <<< "${BASH_REMATCH[1]}"
+            curr_exclusions+=("${exclusions[@]}")
             continue
         fi
 
@@ -124,10 +130,20 @@ function _argivo::load_annotations() {
                 _ARGIVO_EXAMPLES["$function_name"]="$(printf '%s\n' "${curr_examples[@]}")"
             fi
 
+            # Function exclusions
+            if ((${#curr_exclusions[@]} > 0)); then
+                # shellcheck disable=SC2034
+                _ARGIVO_FUNCTION_EXCLUSIONS["$function_name"]="${curr_exclusions[*]}"
+            fi
+
             # Prepares the variables for the next function definition
+            unset curr_param_descriptions
+            declare -A curr_param_descriptions=()
+
             curr_descr=""
             curr_params=()
             curr_examples=()
+            curr_exclusions=()
         fi
     done < "$_script"
 
@@ -157,4 +173,20 @@ function _argivo::get_alias() {
     done
 
     return 1
+}
+
+# Get the exclusions of current script
+function _argivo::get_exclusions() {
+    declare -A exclusions=()
+
+    local function_name
+    local exclusion
+
+    for function_name in "${!_ARGIVO_FUNCTION_EXCLUSIONS[@]}"; do
+        for exclusion in ${_ARGIVO_FUNCTION_EXCLUSIONS[$function_name]}; do
+            exclusions["$exclusion"]=1
+        done
+    done
+
+    printf '%s\n' "${!exclusions[@]}" | sort
 }

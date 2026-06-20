@@ -24,17 +24,46 @@ function _argivo::help_script() {
         return
     fi
 
+    # Usage message
     echo "Usage: $script_name <COMMAND> [ARGS...]"
     echo "$_ARGIVO_SCRIPT_DESCRIPTION"
-    echo
 
-    echo "Available commands:"
+    # Available commands
+    commands="$(_argivo::get_commands)"
 
-    while read -r command; do
-        printf "  %-20s %s\n" \
-            "$(_argivo::usage "$command")" \
-            "${_ARGIVO_DESCRIPTIONS[$command]:-No description}"
-    done < <(_argivo::get_commands)
+    if [[ -n "$commands" ]]; then
+        echo
+        echo "Available commands:"
+
+        while read -r command; do
+            printf "  %-20s %s\n" \
+                "$(_argivo::usage "$command")" \
+                "${_ARGIVO_DESCRIPTIONS[$command]:-No description}"
+        done <<< "$commands"
+    fi
+
+    # Mutually exclusive commands
+    exclusions="$(_argivo::get_exclusions)"
+
+    if [[ -n "$exclusions" ]]; then
+        echo
+        echo "Mutually exclusive commands:"
+
+        while read -r group; do
+            commands=()
+
+            # Prepares commands for current group
+            for function_name in "${!_ARGIVO_FUNCTION_EXCLUSIONS[@]}"; do
+                for function_group in ${_ARGIVO_FUNCTION_EXCLUSIONS[$function_name]}; do
+                    if [[ "$function_group" == "$group" ]]; then
+                        commands+=("--$function_name")
+                    fi
+                done
+            done
+
+            printf "  %-20s %s\n" "@$group" "${commands[*]}"
+        done <<< "$exclusions"
+    fi
 }
 
 # Print detailed help information for a specific command
@@ -84,6 +113,32 @@ function _argivo::help_cmd() {
                 "$(_argivo::usage "$command" | sed 's/ \[[^]]*\]//g')" \
                 "$example"
         done <<< "${_ARGIVO_EXAMPLES[$command]}"
+    fi
+
+    # Show exclusions for the command
+    if [[ -n "${_ARGIVO_FUNCTION_EXCLUSIONS[$command]:-}" ]]; then
+        echo
+        echo "Mutually exclusive with:"
+
+        local exclusion
+        local function_name
+        local commands
+
+        for exclusion in ${_ARGIVO_FUNCTION_EXCLUSIONS[$command]}; do
+            commands=()
+
+            for function_name in "${!_ARGIVO_FUNCTION_EXCLUSIONS[@]}"; do
+                [[ "$function_name" == "$command" ]] && continue
+
+                for function_group in ${_ARGIVO_FUNCTION_EXCLUSIONS[$function_name]}; do
+                    if [[ "$function_group" == "$exclusion" ]]; then
+                        commands+=("--$function_name")
+                    fi
+                done
+            done
+
+            printf "  %-15s %s\n" "@$exclusion" "${commands[*]}"
+        done
     fi
 }
 
