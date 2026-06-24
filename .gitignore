@@ -1,0 +1,33 @@
+## Visual Studio Code
+.vscode/
+
+## Windows
+Thumbs.db
+Desktop.ini
+
+## Temporary files
+*.tmp
+*.log
+*.bak
+
+## Environment files
+.env
+.env.*
+
+## Archives
+*.zip
+*.tar
+*.tar.gz
+
+## Build and release artifacts
+build/
+dist/
+release/
+
+## Editor backup files
+*.swp
+*.swo
+*~
+
+## Project notes
+TODO.*
