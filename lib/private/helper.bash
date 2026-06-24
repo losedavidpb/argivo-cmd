@@ -53,8 +53,8 @@ function _argivo::help_script() {
             commands=()
 
             # Prepares commands for current group
-            for function_name in "${!_ARGIVO_FUNCTION_EXCLUSIONS[@]}"; do
-                for function_group in ${_ARGIVO_FUNCTION_EXCLUSIONS[$function_name]}; do
+            for function_name in "${!_ARGIVO_EXCLUSIONS[@]}"; do
+                for function_group in ${_ARGIVO_EXCLUSIONS[$function_name]}; do
                     if [[ "$function_group" == "$group" ]]; then
                         commands+=("--$function_name")
                     fi
@@ -116,7 +116,7 @@ function _argivo::help_cmd() {
     fi
 
     # Show exclusions for the command
-    if [[ -n "${_ARGIVO_FUNCTION_EXCLUSIONS[$command]:-}" ]]; then
+    if [[ -n "${_ARGIVO_EXCLUSIONS[$command]:-}" ]]; then
         echo
         echo "Mutually exclusive with:"
 
@@ -124,13 +124,13 @@ function _argivo::help_cmd() {
         local function_name
         local commands
 
-        for exclusion in ${_ARGIVO_FUNCTION_EXCLUSIONS[$command]}; do
+        for exclusion in ${_ARGIVO_EXCLUSIONS[$command]}; do
             commands=()
 
-            for function_name in "${!_ARGIVO_FUNCTION_EXCLUSIONS[@]}"; do
+            for function_name in "${!_ARGIVO_EXCLUSIONS[@]}"; do
                 [[ "$function_name" == "$command" ]] && continue
 
-                for function_group in ${_ARGIVO_FUNCTION_EXCLUSIONS[$function_name]}; do
+                for function_group in ${_ARGIVO_EXCLUSIONS[$function_name]}; do
                     if [[ "$function_group" == "$exclusion" ]]; then
                         commands+=("--$function_name")
                     fi

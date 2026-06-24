@@ -8,36 +8,53 @@ set -Eeuo pipefail
 # shellcheck disable=SC2034
 _ARGIVO_ANNOTATIONS_LOADED=false
 
-# Annotations for user-defined functions in the script
+# Description of the script, if provided by the user
+_ARGIVO_SCRIPT_DESCRIPTION=""
+
+# Annotations for user-defined functions
 declare -A _ARGIVO_DESCRIPTIONS
 declare -A _ARGIVO_PARAMS
-declare -A _ARGIVO_PARAM_DESCRIPTIONS
 declare -A _ARGIVO_ALIASES
 declare -A _ARGIVO_EXAMPLES
-declare -A _ARGIVO_FUNCTION_EXCLUSIONS
+declare -A _ARGIVO_EXCLUSIONS
+declare -A _ARGIVO_REQUIRES
 
-# Description of the script, if provided by the user
-declare _ARGIVO_SCRIPT_DESCRIPTION=""
+# Available properties for user-defined parameters
+declare -A _ARGIVO_PARAM_TYPES
+declare -A _ARGIVO_PARAM_DEFAULTS
+declare -A _ARGIVO_PARAM_OPTIONAL
+declare -A _ARGIVO_PARAM_DESCRIPTIONS
 
 # Load all annotations from the script
 function _argivo::load_annotations() {
     # Annotations only need to be parsed once, as they are only used by
     # internal commands that are cached after the first execution
-    if $_ARGIVO_ANNOTATIONS_LOADED; then
-        return
-    fi
+    $_ARGIVO_ANNOTATIONS_LOADED && return
 
     local line
 
-    # Temporary parameter descriptions for the current function
-    declare -A curr_param_descriptions=()
-
-    # Current annotations for the current function
+    # Function annotations with a single value
     local curr_descr=""
-    local curr_params=()
     local curr_alias=""
+
+    # Current parameter being parsed
+    local param_descr=""
+    local param_name=""
+    local param_type=""
+    local param_default=""
+    local param_optional=false
+
+    # Function annotations
+    local curr_params=()
     local curr_examples=()
     local curr_exclusions=()
+    local curr_requires=()
+
+    # Parameter annotations
+    local -A curr_param_descr=()
+    local -A curr_param_types=()
+    local -A curr_param_defaults=()
+    local -A curr_param_optional=()
 
     # shellcheck disable=SC2154
     while IFS= read -r line; do
@@ -49,10 +66,52 @@ function _argivo::load_annotations() {
         fi
 
         # Check for parameter comments in the form of:
-        # @param name This is a description for a parameter
-        if [[ "$line" =~ ^[[:space:]]*#[[:space:]]*@param[[:space:]]+([a-zA-Z_][a-zA-Z0-9_]*)[[:space:]]+(.*)$ ]]; then
-            curr_params+=("${BASH_REMATCH[1]}")
-            curr_param_descriptions["${BASH_REMATCH[1]}"]="${BASH_REMATCH[2]}"
+        # @param name [type=value] [default=value] [optional] This is a description for a parameter
+        if [[ "$line" =~ ^[[:space:]]*#[[:space:]]*@param[[:space:]]+(.*)$ ]]; then
+            read -r -a parts <<< "${BASH_REMATCH[1]}"
+
+            param_descr=""
+            param_name="${parts[0]}"
+            param_type=""
+            param_default=""
+            param_optional=false
+
+            local i
+
+            # Properties of the parameter
+            for ((i = 1; i < ${#parts[@]}; i++)); do
+                local token="${parts[$i]}"
+
+                # Type comment
+                if [[ "$token" =~ ^type=(.+)$ ]]; then
+                    param_type="${BASH_REMATCH[1]}"
+                    continue
+                fi
+
+                # Default comment
+                if [[ "$token" =~ ^default=(.+)$ ]]; then
+                    param_default="${BASH_REMATCH[1]}"
+                    continue
+                fi
+
+                # Optional comment
+                if [[ "$token" == "optional" ]]; then
+                    param_optional=true
+                    continue
+                fi
+
+                # First token that is not metadata starts the description
+                param_descr="${parts[*]:$i}"
+                break
+            done
+
+            curr_params+=("$param_name")
+
+            curr_param_descr["$param_name"]="$param_descr"
+            curr_param_types["$param_name"]="$param_type"
+            curr_param_defaults["$param_name"]="$param_default"
+            curr_param_optional["$param_name"]="$param_optional"
+
             continue
         fi
 
@@ -78,6 +137,14 @@ function _argivo::load_annotations() {
             continue
         fi
 
+        # Check for requires comments in the form of:
+        # @req function_name
+        if [[ "$line" =~ ^[[:space:]]*#[[:space:]]*@req[[:space:]]+([a-zA-Z_][a-zA-Z0-9_]*([[:space:]]+[a-zA-Z_][a-zA-Z0-9_]*)*)[[:space:]]*$ ]]; then
+            read -r -a requires <<< "${BASH_REMATCH[1]}"
+            curr_requires+=("${requires[@]}")
+            continue
+        fi
+
         local function_name=""
 
         # Check for function definitions that use the "function" keyword
@@ -95,9 +162,11 @@ function _argivo::load_annotations() {
         # of the current function with its name, if we found a function definition
         if [[ -n "$function_name" ]]; then
 
-            # Function description
+            # Script description
             if [[ "$function_name" == "main" ]]; then
                 _ARGIVO_SCRIPT_DESCRIPTION="$curr_descr"
+
+            # Function description
             elif [[ -n "$curr_descr" ]]; then
                 # shellcheck disable=SC2034
                 _ARGIVO_DESCRIPTIONS["$function_name"]="$curr_descr"
@@ -110,10 +179,12 @@ function _argivo::load_annotations() {
 
                 local param
 
-                # Parameter descriptions
+                # Parameter properties
                 for param in "${curr_params[@]}"; do
-                    # shellcheck disable=SC2034
-                    _ARGIVO_PARAM_DESCRIPTIONS["$function_name:$param"]="${curr_param_descriptions[$param]}"
+                    _ARGIVO_PARAM_DESCRIPTIONS["$function_name:$param"]="${curr_param_descr[$param]}"
+                    _ARGIVO_PARAM_TYPES["$function_name:$param"]="${curr_param_types[$param]}"
+                    _ARGIVO_PARAM_DEFAULTS["$function_name:$param"]="${curr_param_defaults[$param]}"
+                    _ARGIVO_PARAM_OPTIONAL["$function_name:$param"]="${curr_param_optional[$param]}"
                 done
             fi
 
@@ -133,17 +204,26 @@ function _argivo::load_annotations() {
             # Function exclusions
             if ((${#curr_exclusions[@]} > 0)); then
                 # shellcheck disable=SC2034
-                _ARGIVO_FUNCTION_EXCLUSIONS["$function_name"]="${curr_exclusions[*]}"
+                _ARGIVO_EXCLUSIONS["$function_name"]="${curr_exclusions[*]}"
             fi
 
-            # Prepares the variables for the next function definition
-            unset curr_param_descriptions
-            declare -A curr_param_descriptions=()
+            # Function requires
+            if ((${#curr_requires[@]} > 0)); then
+                # shellcheck disable=SC2034
+                _ARGIVO_REQUIRES["$function_name"]="${curr_requires[*]}"
+            fi
 
-            curr_descr=""
+            # Clean function annotations
             curr_params=()
             curr_examples=()
             curr_exclusions=()
+            curr_requires=()
+
+            # Clean parameter annotations
+            curr_param_descr=()
+            curr_param_types=()
+            curr_param_defaults=()
+            curr_param_optional=()
         fi
     done < "$_script"
 
@@ -157,7 +237,7 @@ function _argivo::load_annotations() {
 # Discover all user-defined commands excluding those that are
 # internal to argivo or defined as private
 function _argivo::get_commands() {
-    declare -F | awk '{print $3}' | grep -v '^argivo::' | grep -v '^_' | grep -v '^main$' || true
+    declare -F | awk '{print $3}' | grep -Ev '^(argivo::|_|main$)'
 }
 
 # Get the alias of a given function, if it exists
@@ -177,16 +257,32 @@ function _argivo::get_alias() {
 
 # Get the exclusions of current script
 function _argivo::get_exclusions() {
-    declare -A exclusions=()
+    local -A exclusions=()
 
     local function_name
     local exclusion
 
-    for function_name in "${!_ARGIVO_FUNCTION_EXCLUSIONS[@]}"; do
-        for exclusion in ${_ARGIVO_FUNCTION_EXCLUSIONS[$function_name]}; do
+    for function_name in "${!_ARGIVO_EXCLUSIONS[@]}"; do
+        for exclusion in ${_ARGIVO_EXCLUSIONS[$function_name]}; do
             exclusions["$exclusion"]=1
         done
     done
 
     printf '%s\n' "${!exclusions[@]}" | sort
+}
+
+# Get the requires of current script
+function _argivo::get_requires() {
+    local -A requires=()
+
+    local function_name
+    local requires_item
+
+    for function_name in "${!_ARGIVO_REQUIRES[@]}"; do
+        for requires_item in ${_ARGIVO_REQUIRES[$function_name]}; do
+            requires["$requires_item"]=1
+        done
+    done
+
+    printf '%s\n' "${!requires[@]}" | sort
 }

@@ -1,0 +1,20 @@
+#!/usr/bin/env argivo
+# shellcheck shell=bash
+
+# @desc Build and deploy the application
+function main() {
+    argivo::error "no command provided"
+}
+
+# @desc Compile the application
+function build() {
+    echo "Building the application ..."
+    sleep 3
+}
+
+# @desc Deploy de aplication
+# @req build
+function deploy() {
+    echo "Deploying the application..."
+    sleep 3
+}

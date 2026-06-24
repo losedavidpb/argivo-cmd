@@ -64,6 +64,22 @@ function _argivo::check() {
         exit 1
     fi
 
+    # Check that all requires are defined once with a valid function
+    if ! _argivo::check_requires "$script"; then
+        echo "error: duplicate or undefined required commands found"
+        exit 1
+    fi
+
+    # Check that defined types are valid
+    if ! _argivo::check_param_types; then
+        exit 1
+    fi
+
+    # Check that default values are defined based on its type
+    if ! _argivo::check_param_defaults; then
+        exit 1
+    fi
+
     # Show syntax validation results
     if [[ "$verbose" == "true" ]]; then
         echo
@@ -72,6 +88,9 @@ function _argivo::check() {
         echo "✓ All command names are valid"
         echo "✓ All command aliases are unique"
         echo "✓ All exclusions are unique at each function"
+        echo "✓ All requires are unique and valid at each function"
+        echo "✓ All parameter types are supported"
+        echo "✓ All parameter default values match their declared types"
 
         echo
         echo "No issues found"
@@ -161,6 +180,104 @@ function _argivo::check_exclusions() {
             done
         fi
     done < "$script"
+
+    return 0
+}
+
+# Check that all requires are valid and defined once at each function
+function _argivo::check_requires() {
+    local script="$1"
+
+    local line
+    declare -A functions=()
+    declare -A requires=()
+
+    # Collect all function values before checking its dependencies
+    while IFS= read -r line; do
+        if [[ "$line" =~ ^[[:space:]]*function[[:space:]]+([a-zA-Z_][a-zA-Z0-9_]*) ]]; then
+            functions["${BASH_REMATCH[1]}"]=1
+            continue
+        fi
+
+        if [[ "$line" =~ ^[[:space:]]*([a-zA-Z_][a-zA-Z0-9_]*)[[:space:]]*\(\) ]]; then
+            functions["${BASH_REMATCH[1]}"]=1
+        fi
+    done < "$script"
+
+    while IFS= read -r line; do
+        # Reset requires for the new function
+        if [[ "$line" =~ ^[[:space:]]*(function[[:space:]]+)?[a-zA-Z_][a-zA-Z0-9_]*[[:space:]]*(\(\))? ]]; then
+            requires=()
+            continue
+        fi
+
+        # Check requires for current function
+        if [[ "$line" =~ ^[[:space:]]*#[[:space:]]*@req[[:space:]]+([a-zA-Z_][a-zA-Z0-9_]*([[:space:]]+[a-zA-Z_][a-zA-Z0-9_]*)*)[[:space:]]*$ ]]; then
+            local required
+
+            for required in ${BASH_REMATCH[1]}; do
+                # Duplicate require
+                if [[ -n "${requires[$required]:-}" ]]; then
+                    echo "error: duplicate require: $required"
+                    return 1
+                fi
+
+                # Required function does not exist
+                if [[ -z "${functions[$required]:-}" ]]; then
+                    echo "error: unknown required command: $required"
+                    return 1
+                fi
+
+                requires["$required"]=1
+            done
+        fi
+    done < "$script"
+
+    return 0
+}
+
+# Check that all declared parameter types are supported
+function _argivo::check_param_types() {
+    local key
+    local validator
+
+    # Annotations must be loaded first
+    _argivo::load_annotations
+
+    for key in "${!_ARGIVO_PARAM_TYPES[@]}"; do
+        [[ -z "${_ARGIVO_PARAM_TYPES[$key]}" ]] && continue
+
+        validator="argivo::is_${_ARGIVO_PARAM_TYPES[$key]}"
+
+        if ! declare -F "$validator" >/dev/null; then
+            echo "error: unknown parameter type: ${_ARGIVO_PARAM_TYPES[$key]} for '$key'"
+            return 1
+        fi
+    done
+
+    return 0
+}
+
+# Check that parameter default values match their declared types
+function _argivo::check_param_defaults() {
+    local key
+    local validator
+
+    # Annotations must be loaded first
+    _argivo::load_annotations
+
+    for key in "${!_ARGIVO_PARAM_DEFAULTS[@]}"; do
+        [[ -z "${_ARGIVO_PARAM_DEFAULTS[$key]}" ]] && continue
+        [[ -z "${_ARGIVO_PARAM_TYPES[$key]}" ]] && continue
+
+        validator="argivo::is_${_ARGIVO_PARAM_TYPES[$key]}"
+
+        # Check default value based on its type
+        if ! "$validator" "${_ARGIVO_PARAM_DEFAULTS[$key]}"; then
+            echo "error: invalid default value '${_ARGIVO_PARAM_DEFAULTS[$key]}' for '$key'"
+            return 1
+        fi
+    done
 
     return 0
 }

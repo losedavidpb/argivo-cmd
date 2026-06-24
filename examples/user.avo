@@ -1,0 +1,26 @@
+#!/usr/bin/env argivo
+# shellcheck shell=bash
+
+# @desc User management example
+function main() {
+    argivo::error "no command provided"
+}
+
+# @desc Create a user
+# @param username Username
+# @param age type=number default=18 User age
+# @param admin type=boolean optional Administrator privileges
+function create_user() {
+    local username="$1"
+    local age="$2"
+    local admin="${3:-}"
+
+    echo "Username: $username"
+    echo "Age: $age"
+
+    if [[ -n "$admin" ]]; then
+        echo "Admin: $admin"
+    else
+        echo "Admin: not specified"
+    fi
+}

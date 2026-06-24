@@ -4,6 +4,13 @@
 
 set -Eeuo pipefail
 
+# Check whether a value is text
+# Usage: argivo::is_text <value>
+function argivo::is_text() {
+    (($# == 1)) || return 1
+    return 0
+}
+
 # Check whether a value is a valid number
 # Usage: argivo::is_number <number>
 function argivo::is_number() {

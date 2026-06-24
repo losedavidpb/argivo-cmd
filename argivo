@@ -72,9 +72,13 @@ case "$1" in
 
     --check|-c)
         # shellcheck source=/dev/null
-        source "$_argivo_private_lib/checker.bash"
+        source "$_argivo_private_lib/parser.bash"
 
+        # shellcheck source=/dev/null
+        source "$_argivo_private_lib/checker.bash"
         shift
+
+        _script="$1"
         _argivo::check "$@" --verbose
         exit 0
         ;;
@@ -97,6 +101,9 @@ if [[ ! -r "$_script" ]]; then
 fi
 
 (
+    # shellcheck source=/dev/null
+    source "$_argivo_private_lib/parser.bash"
+
     # shellcheck source=/dev/null
     source "$_argivo_private_lib/checker.bash"
 
@@ -214,7 +221,24 @@ while (($# > 0)); do
     # Collect the arguments for the command based on
     # the number of parameters it expects
     for ((i = 0; i < _param_count; i++)); do
+        _param="${_params[$i]}"
+
+        _key="$_cmd:$_param"
+
+        _default="${_ARGIVO_PARAM_DEFAULTS[$_key]:-}"
+        _optional="${_ARGIVO_PARAM_OPTIONAL[$_key]:-false}"
+
         if (($# == 0)); then
+            if [[ -n "$_default" ]]; then
+                _cmd_args+=("$_default")
+                continue
+            fi
+
+            if [[ "$_optional" == "true" ]]; then
+                _cmd_args+=("")
+                continue
+            fi
+
             # shellcheck source=/dev/null
             source "$_argivo_private_lib/helper.bash"
 
@@ -227,8 +251,24 @@ while (($# > 0)); do
         shift
     done
 
+    # Check parameter types
+    for ((i = 0; i < ${#_cmd_args[@]}; i++)); do
+        _param="${_params[$i]}"
+        _value="${_cmd_args[$i]}"
+        _type="${_ARGIVO_PARAM_TYPES["$_cmd:$_param"]:-}"
+
+        # Optional or untyped parameters may be omitted
+        [[ -z "$_type" ]] && continue
+        [[ -z "$_value" ]] && continue
+
+        if ! "argivo::is_${_type}" "$_value"; then
+            echo "error: parameter '$_param' must be a valid $_type"
+            exit 1
+        fi
+    done
+
     # Check exclusion groups
-    for _group in ${_ARGIVO_FUNCTION_EXCLUSIONS[$_cmd]:-}; do
+    for _group in ${_ARGIVO_EXCLUSIONS[$_cmd]:-}; do
         if [[ -n "${_executed_exclusions[$_group]:-}" ]]; then
             echo "error: exclusion group conflict: $_group"
             exit 1
@@ -242,6 +282,47 @@ while (($# > 0)); do
 
     for _arg in "${_cmd_args[@]}"; do
         _planned_args+=("$_arg")
+    done
+done
+
+declare -A _explicit_commands=()
+
+for _cmd in "${_planned_commands[@]}"; do
+    _explicit_commands["$_cmd"]=1
+done
+
+# Check requires groups
+for ((i = 0; i < ${#_planned_commands[@]}; i++)); do
+    _cmd="${_planned_commands[$i]}"
+
+    for _required in ${_ARGIVO_REQUIRES[$_cmd]:-}; do
+
+        # Required command was explicitly provided
+        if [[ -n "${_explicit_commands[$_required]:-}" ]]; then
+            _found_before=false
+
+            for ((j = 0; j < i; j++)); do
+                if [[ "${_planned_commands[$j]}" == "$_required" ]]; then
+                    _found_before=true
+                    break
+                fi
+            done
+
+            if ! $_found_before; then
+                echo "error: command '$_cmd' requires '$_required' to appear before it"
+                exit 1
+            fi
+
+        # Required command was not explicitly provided
+        else
+            _planned_commands=("${_planned_commands[@]:0:i}" "$_required" "${_planned_commands[@]:i}")
+            _planned_argc=("${_planned_argc[@]:0:i}" "0" "${_planned_argc[@]:i}")
+
+            _explicit_commands["$_required"]=1
+
+            i=$((i - 1))
+            break
+        fi
     done
 done
 
