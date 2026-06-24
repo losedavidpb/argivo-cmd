@@ -208,6 +208,18 @@ while (($# > 0)); do
         exit 1
     fi
 
+    # Hidden commands cannot be executed directly
+    if [[ "${_ARGIVO_HIDDEN[$_cmd]:-false}" == "true" ]]; then
+        echo "error: unknown command: $_cmd"
+        exit 1
+    fi
+
+    # Private commands cannot be executed directly
+    if [[ "$_cmd" == _* || "$_cmd" == argivo::* ]]; then
+        echo "error: unknown command: $_cmd"
+        exit 1
+    fi
+
     _param_count=0
 
     # Determine how many arguments the command expects

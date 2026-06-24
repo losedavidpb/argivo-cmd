@@ -58,6 +58,12 @@ function _argivo::check() {
         exit 1
     fi
 
+    # Check that @hidden is not used in main
+    if ! _argivo::check_hidden "$script"; then
+        echo "error: main function cannot be marked as hidden"
+        exit 1
+    fi
+
     # Check that all exclusions are defined once at each function
     if ! _argivo::check_exclusions "$script"; then
         echo "error: duplicate exclusions found at a function"
@@ -87,6 +93,7 @@ function _argivo::check() {
         echo "✓ Script is a valid argivo script"
         echo "✓ All command names are valid"
         echo "✓ All command aliases are unique"
+        echo "✓ Main function is not marked as hidden"
         echo "✓ All exclusions are unique at each function"
         echo "✓ All requires are unique and valid at each function"
         echo "✓ All parameter types are supported"
@@ -153,12 +160,38 @@ function _argivo::check_aliases() {
     [[ -z "$duplicates" ]]
 }
 
+# Check that hidden is not applied to main
+function _argivo::check_hidden() {
+    local script="$1"
+
+    local line
+    local hidden=false
+
+    while IFS= read -r line; do
+        # The function does contain the @hidden annotation
+        if [[ "$line" =~ ^[[:space:]]*#[[:space:]]*@hidden[[:space:]]*$ ]]; then
+            hidden=true
+            continue
+        fi
+
+        # Check if the main function includes @hidden
+        if [[ "$line" =~ ^[[:space:]]*(function[[:space:]]+)?main[[:space:]]*(\(\))? ]]; then
+            $hidden && return 1
+        fi
+
+        # Any non-comment line breaks the annotation block
+        [[ ! "$line" =~ ^[[:space:]]*# ]] && hidden=false
+    done < "$script"
+
+    return 0
+}
+
 # Check that all exclusions are defined once at each function
 function _argivo::check_exclusions() {
     local script="$1"
 
     local line
-    declare -A exclusions=()
+    local -A exclusions=()
 
     while IFS= read -r line; do
         # Reset exclusions for the new function
@@ -189,8 +222,8 @@ function _argivo::check_requires() {
     local script="$1"
 
     local line
-    declare -A functions=()
-    declare -A requires=()
+    local -A functions=()
+    local -A requires=()
 
     # Collect all function values before checking its dependencies
     while IFS= read -r line; do
@@ -238,16 +271,15 @@ function _argivo::check_requires() {
 
 # Check that all declared parameter types are supported
 function _argivo::check_param_types() {
-    local key
-    local validator
-
     # Annotations must be loaded first
     _argivo::load_annotations
+
+    local key
 
     for key in "${!_ARGIVO_PARAM_TYPES[@]}"; do
         [[ -z "${_ARGIVO_PARAM_TYPES[$key]}" ]] && continue
 
-        validator="argivo::is_${_ARGIVO_PARAM_TYPES[$key]}"
+        local validator="argivo::is_${_ARGIVO_PARAM_TYPES[$key]}"
 
         if ! declare -F "$validator" >/dev/null; then
             echo "error: unknown parameter type: ${_ARGIVO_PARAM_TYPES[$key]} for '$key'"
@@ -260,17 +292,16 @@ function _argivo::check_param_types() {
 
 # Check that parameter default values match their declared types
 function _argivo::check_param_defaults() {
-    local key
-    local validator
-
     # Annotations must be loaded first
     _argivo::load_annotations
+
+    local key
 
     for key in "${!_ARGIVO_PARAM_DEFAULTS[@]}"; do
         [[ -z "${_ARGIVO_PARAM_DEFAULTS[$key]}" ]] && continue
         [[ -z "${_ARGIVO_PARAM_TYPES[$key]}" ]] && continue
 
-        validator="argivo::is_${_ARGIVO_PARAM_TYPES[$key]}"
+        local validator="argivo::is_${_ARGIVO_PARAM_TYPES[$key]}"
 
         # Check default value based on its type
         if ! "$validator" "${_ARGIVO_PARAM_DEFAULTS[$key]}"; then

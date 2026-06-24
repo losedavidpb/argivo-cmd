@@ -9,12 +9,16 @@ function main() {
 # @desc Create a user
 # @param username Username
 # @param age type=number default=18 User age
-# @param admin type=boolean optional Administrator privileges
+# @param admin type=boolean optional Admin privileges
 function create_user() {
     local username="$1"
     local age="$2"
     local admin="${3:-}"
 
+    _validate_username "$username"
+    _save_user "$username"
+
+    echo "User '$1' created"
     echo "Username: $username"
     echo "Age: $age"
 
@@ -23,4 +27,18 @@ function create_user() {
     else
         echo "Admin: not specified"
     fi
+}
+
+# @hidden
+# @desc Validate username
+function validate_username() {
+    [[ -z "$1" ]] && {
+        echo "invalid username"
+        return 1
+    }
+}
+
+# @desc Save user in database
+function _save_user() {
+    echo "(saving '$1' in database)"
 }

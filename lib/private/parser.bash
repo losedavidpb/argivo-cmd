@@ -18,6 +18,7 @@ declare -A _ARGIVO_ALIASES
 declare -A _ARGIVO_EXAMPLES
 declare -A _ARGIVO_EXCLUSIONS
 declare -A _ARGIVO_REQUIRES
+declare -A _ARGIVO_HIDDEN
 
 # Available properties for user-defined parameters
 declare -A _ARGIVO_PARAM_TYPES
@@ -36,6 +37,7 @@ function _argivo::load_annotations() {
     # Function annotations with a single value
     local curr_descr=""
     local curr_alias=""
+    local curr_hidden=false
 
     # Current parameter being parsed
     local param_descr=""
@@ -58,6 +60,13 @@ function _argivo::load_annotations() {
 
     # shellcheck disable=SC2154
     while IFS= read -r line; do
+        # Check for hidden comments in the form of:
+        # @hidden
+        if [[ "$line" =~ ^[[:space:]]*#[[:space:]]*@hidden[[:space:]]*$ ]]; then
+            curr_hidden=true
+            continue
+        fi
+
         # Check for description comments in the form of:
         # @desc This is a description for a function
         if [[ "$line" =~ ^[[:space:]]*#[[:space:]]*@desc[[:space:]]+(.*)$ ]]; then
@@ -161,15 +170,20 @@ function _argivo::load_annotations() {
         # Associate the collected description and parameters
         # of the current function with its name, if we found a function definition
         if [[ -n "$function_name" ]]; then
+            # Hidden functions
+            _ARGIVO_HIDDEN["$function_name"]="$curr_hidden"
+            curr_hidden=false
 
             # Script description
             if [[ "$function_name" == "main" ]]; then
                 _ARGIVO_SCRIPT_DESCRIPTION="$curr_descr"
+                curr_descr=""
 
             # Function description
             elif [[ -n "$curr_descr" ]]; then
                 # shellcheck disable=SC2034
                 _ARGIVO_DESCRIPTIONS["$function_name"]="$curr_descr"
+                curr_descr=""
             fi
 
             # Function parameters
@@ -235,9 +249,20 @@ function _argivo::load_annotations() {
 }
 
 # Discover all user-defined commands excluding those that are
-# internal to argivo or defined as private
+# internal to argivo, private, or marked as hidden
 function _argivo::get_commands() {
-    declare -F | awk '{print $3}' | grep -Ev '^(argivo::|_|main$)'
+    local cmd
+    local commands
+
+    # Get all declared user-defined functions
+    commands="$(declare -F | awk '{print $3}' | grep -Ev '^(argivo::|_|main$)')"
+    [[ -z "$commands" ]] && return
+
+    # Skip commands marked with the @hidden annotation
+    while read -r cmd; do
+        [[ "${_ARGIVO_HIDDEN[$cmd]:-}" == "true" ]] && continue
+        printf '%s\n' "$cmd"
+    done <<< "$commands"
 }
 
 # Get the alias of a given function, if it exists
@@ -271,17 +296,14 @@ function _argivo::get_exclusions() {
     printf '%s\n' "${!exclusions[@]}" | sort
 }
 
-# Get the requires of current script
+# Get the commands that define requirements
 function _argivo::get_requires() {
     local -A requires=()
 
     local function_name
-    local requires_item
 
     for function_name in "${!_ARGIVO_REQUIRES[@]}"; do
-        for requires_item in ${_ARGIVO_REQUIRES[$function_name]}; do
-            requires["$requires_item"]=1
-        done
+        requires["$function_name"]=1
     done
 
     printf '%s\n' "${!requires[@]}" | sort
