@@ -39,7 +39,6 @@ function connect() {
 # @desc Disconnects the network.
 # @excl network
 # @alias d
-# @req connect
 function disconnect() {
     if $status; then
         argivo::log INFO "Disconnecting the localhost ..."
@@ -56,7 +55,6 @@ function disconnect() {
 # @desc Restarts the network.
 # @excl network
 # @alias r
-# @req connect disconnect
 function restart() {
     # Since the network state is not persisted,
     # pretend the connection is currently open
