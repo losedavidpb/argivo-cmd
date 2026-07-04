@@ -28,6 +28,9 @@ function _argivo::help_script() {
     echo "Usage: $script_name <COMMAND> [ARGS...]"
     echo "$_ARGIVO_SCRIPT_DESCRIPTION"
 
+    # Show documentation for main if it is documented
+    _argivo::print_help "$script_name" "main"
+
     # Available commands
     local commands
     commands="$(_argivo::get_commands)"
@@ -103,7 +106,7 @@ function _argivo::help_cmd() {
     fi
 
     # Check that the command exists
-    if [[ -z "${_ARGIVO_DESCRIPTIONS[$command]:-}" ]]; then
+    if [[ -z "${_ARGIVO_DESCRIPTIONS[$command]:-}" && "$command" != "main" ]]; then
         echo "error: unknown command: $command"
         return 1
     fi
@@ -122,7 +125,23 @@ function _argivo::help_cmd() {
 
     # Usage message
     echo "Usage: $script_name $(_argivo::usage "$command")"
-    echo "${_ARGIVO_DESCRIPTIONS[$command]}"
+
+    # Show the description for the script
+    if [[ "$command" == "main" ]]; then
+        echo "$_ARGIVO_SCRIPT_DESCRIPTION"
+
+    # Description for a specific command
+    else
+        echo "${_ARGIVO_DESCRIPTIONS[$command]}"
+    fi
+
+    _argivo::print_help "$script_name" "$command"
+}
+
+# Print command documentation (without header)
+function _argivo::print_help() {
+    local script_name="$1"
+    local command="$2"
 
     # Show parameters and their properties
     if [[ -n "${_ARGIVO_PARAMS[$command]:-}" ]]; then
@@ -182,10 +201,21 @@ function _argivo::help_cmd() {
         while IFS= read -r example; do
             [[ -z "$example" ]] && continue
 
-            printf "  %s %s %s\n" \
-                "$script_name" \
-                "$(_argivo::usage "$command" | sed 's/ \[[^]]*\]//g')" \
-                "$example"
+            # If the command is "main", show the script
+            # name and example
+            if [[ "$command" == "main" ]]; then
+                printf "  %s %s\n" \
+                    "$script_name" \
+                    "$example"
+
+            # If the command is not "main", show the
+            # usage string for the command
+            else
+                printf "  %s %s %s\n" \
+                    "$script_name" \
+                    "$(_argivo::usage "$command" | sed 's/ \[[^]]*\]//g')" \
+                    "$example"
+            fi
         done <<< "${_ARGIVO_EXAMPLES[$command]}"
     fi
 

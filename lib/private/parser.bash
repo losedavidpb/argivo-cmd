@@ -4,12 +4,19 @@
 
 set -Eeuo pipefail
 
-# Check if annotations have already been loaded
+# Directives for configuring the interpreter
+declare -A  _ARGIVO_DIRECTIVES
+
+# Check if directives have already been loaded
 # shellcheck disable=SC2034
-_ARGIVO_ANNOTATIONS_LOADED=false
+_ARGIVO_DIRECTIVES_LOADED=false
 
 # Description of the script, if provided by the user
 _ARGIVO_SCRIPT_DESCRIPTION=""
+
+# Check if annotations have already been loaded
+# shellcheck disable=SC2034
+_ARGIVO_ANNOTATIONS_LOADED=false
 
 # Annotations for user-defined functions
 declare -A _ARGIVO_DESCRIPTIONS
@@ -25,6 +32,35 @@ declare -A _ARGIVO_PARAM_TYPES
 declare -A _ARGIVO_PARAM_DEFAULTS
 declare -A _ARGIVO_PARAM_OPTIONAL
 declare -A _ARGIVO_PARAM_DESCRIPTIONS
+
+# Load all directives from the script
+function _argivo::load_directives() {
+    # Directives only need to be parsed once, as they are only used by
+    # internal commands that are cached after the first execution
+    $_ARGIVO_DIRECTIVES_LOADED && return
+
+    local line
+
+    # shellcheck disable=SC2154
+    while IFS= read -r line; do
+        # Check for directives in the form of:
+        # @argivo key=value
+        if [[ "$line" =~ ^[[:space:]]*#[[:space:]]*@argivo[[:space:]]+([a-zA-Z_][a-zA-Z0-9_-]*)=(.*)$ ]]; then
+            local key="${BASH_REMATCH[1]}"
+            local value="${BASH_REMATCH[2]}"
+
+            _ARGIVO_DIRECTIVES["$key"]="$value"
+        fi
+
+        # Directives should not be defined after the first function definition
+        if [[ "$line" =~ ^[[:space:]]*(function[[:space:]]+)?([a-zA-Z_][a-zA-Z0-9_]*)([[:space:]]*\(\))? ]]; then
+            break
+        fi
+    done < "$_script"
+
+    # Mark directives as loaded to avoid re-parsing the script
+    _ARGIVO_DIRECTIVES_LOADED=true
+}
 
 # Load all annotations from the script
 function _argivo::load_annotations() {
@@ -75,12 +111,12 @@ function _argivo::load_annotations() {
         fi
 
         # Check for parameter comments in the form of:
-        # @param name [type=value] [default=value] [optional] This is a description for a parameter
-        if [[ "$line" =~ ^[[:space:]]*#[[:space:]]*@param[[:space:]]+(.*)$ ]]; then
-            read -r -a parts <<< "${BASH_REMATCH[1]}"
+        # @param name [type=value] [default=value] [optional] Description
+        if [[ "$line" =~ ^[[:space:]]*#[[:space:]]*@param[[:space:]]+([a-zA-Z_][a-zA-Z0-9_]*)([[:space:]]+.*)?$ ]]; then
+            read -r -a parts <<< "${BASH_REMATCH[2]}"
 
             param_descr=""
-            param_name="${parts[0]}"
+            param_name="${BASH_REMATCH[1]}"
             param_type=""
             param_default=""
             param_optional=false
@@ -162,8 +198,7 @@ function _argivo::load_annotations() {
         fi
 
         # Check for function definitions that do not use the "function" keyword
-        if [[ -z "$function_name" ]] &&
-           [[ "$line" =~ ^[[:space:]]*([a-zA-Z_][a-zA-Z0-9_]*)[[:space:]]*\(\) ]]; then
+        if [[ -z "$function_name" ]] && [[ "$line" =~ ^[[:space:]]*([a-zA-Z_][a-zA-Z0-9_]*)[[:space:]]*\(\) ]]; then
             function_name="${BASH_REMATCH[1]}"
         fi
 

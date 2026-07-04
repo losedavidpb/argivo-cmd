@@ -74,6 +74,11 @@ case "$1" in
         # shellcheck source=/dev/null
         source "$_argivo_private_lib/parser.bash"
 
+
+
+        # shellcheck source=/dev/null
+        source "$_argivo_private_lib/metadata.bash"
+
         # shellcheck source=/dev/null
         source "$_argivo_private_lib/checker.bash"
         shift
@@ -104,6 +109,12 @@ fi
     # shellcheck source=/dev/null
     source "$_argivo_private_lib/parser.bash"
 
+    # Load all directives from the script
+    _argivo::load_directives
+
+    # shellcheck source=/dev/null
+    source "$_argivo_private_lib/metadata.bash"
+
     # shellcheck source=/dev/null
     source "$_argivo_private_lib/checker.bash"
 
@@ -123,17 +134,6 @@ source "$_argivo_private_lib/parser.bash"
 # Load command metadata
 _argivo::load_annotations
 
-# If no command is provided, execute main if it exists
-if (($# == 0)); then
-    if declare -F main >/dev/null; then
-        main
-        exit 0
-    fi
-
-    echo "error: no command provided"
-    exit 1
-fi
-
 # Temporal variables to save commands, arguments
 # and exclusions before executing the script
 declare -A _executed_exclusions=()
@@ -141,64 +141,74 @@ declare -a _planned_commands=()
 declare -a _planned_argc=()
 declare -a _planned_args=()
 
+# If no command is provided, execute main if it exists
+if (($# == 0)); then
+    if declare -F main >/dev/null; then
+        set -- --main
+    else
+        echo "error: no command provided"
+        exit 1
+    fi
+fi
+
 # Process the command-line arguments to determine
 # which command to execute
 while (($# > 0)); do
     # If the first argument is not a command,
-    # execute main with all remaining arguments
+    # treat it as arguments for main
     if [[ ! "$1" =~ ^- ]]; then
         if declare -F main >/dev/null; then
-            main "$@"
-            exit 0
-        fi
-
-        echo "error: unexpected argument: $1"
-        exit 1
-    fi
-
-    # Commands must be specified with a leading "-" or "--"
-    if [[ ! "$1" =~ ^--?[a-zA-Z_][a-zA-Z0-9_]*$ ]]; then
-        echo "error: invalid command syntax: $1"
-        exit 1
-    fi
-
-    # Raw command to be executed
-    _raw_cmd="$1"
-    shift
-
-    # Command is specified with "--", so we remove the
-    # leading dashes to get the command name
-    if [[ "$_raw_cmd" == --* ]]; then
-        _cmd="${_raw_cmd#--}"
-
-        # Built-in help command for user-defined commands
-        if [[ "$_cmd" == "help" ]]; then
-            # shellcheck source=/dev/null
-            source "$_argivo_private_lib/helper.bash"
-
-            _argivo::help_script "$@"
-            exit 0
-        fi
-
-    # Command is specified with "-", so we treat it as an alias
-    # in case it matches one of the defined aliases
-    elif [[ "$_raw_cmd" == -* ]]; then
-        _alias_name="${_raw_cmd#-}"
-
-        # Built-in help command for user-defined commands
-        if [[ "$_alias_name" == "h" ]]; then
-            # shellcheck source=/dev/null
-            source "$_argivo_private_lib/helper.bash"
-
-            _argivo::help_script "$@"
-            exit 0
-        fi
-
-        if [[ -n "${_ARGIVO_ALIASES[$_alias_name]:-}" ]]; then
-            _cmd="${_ARGIVO_ALIASES[$_alias_name]}"
+            _cmd="main"
         else
-            echo "error: unknown command alias: $_alias_name"
+            echo "error: unexpected argument: $1"
             exit 1
+        fi
+    else
+
+        # Commands must be specified with a leading "-" or "--"
+        if [[ ! "$1" =~ ^--?[a-zA-Z_][a-zA-Z0-9_]*$ ]]; then
+            echo "error: invalid command syntax: $1"
+            exit 1
+        fi
+
+        # Raw command to be executed
+        _raw_cmd="$1"
+        shift
+
+        # Command is specified with "--", so we remove the
+        # leading dashes to get the command name
+        if [[ "$_raw_cmd" == --* ]]; then
+            _cmd="${_raw_cmd#--}"
+
+            # Built-in help command for user-defined commands
+            if [[ "$_cmd" == "help" ]]; then
+                # shellcheck source=/dev/null
+                source "$_argivo_private_lib/helper.bash"
+
+                _argivo::help_script "$@"
+                exit 0
+            fi
+
+        # Command is specified with "-", so we treat it as an alias
+        # in case it matches one of the defined aliases
+        elif [[ "$_raw_cmd" == -* ]]; then
+            _alias_name="${_raw_cmd#-}"
+
+            # Built-in help command for user-defined commands
+            if [[ "$_alias_name" == "h" ]]; then
+                # shellcheck source=/dev/null
+                source "$_argivo_private_lib/helper.bash"
+
+                _argivo::help_script "$@"
+                exit 0
+            fi
+
+            if [[ -n "${_ARGIVO_ALIASES[$_alias_name]:-}" ]]; then
+                _cmd="${_ARGIVO_ALIASES[$_alias_name]}"
+            else
+                echo "error: unknown command alias: $_alias_name"
+                exit 1
+            fi
         fi
     fi
 
@@ -295,6 +305,17 @@ while (($# > 0)); do
     for _arg in "${_cmd_args[@]}"; do
         _planned_args+=("$_arg")
     done
+
+    # If the command is "main", check if there are
+    # any unexpected arguments
+    if [[ "$_cmd" == "main" ]]; then
+        if (($# > 0)); then
+            echo "error: unexpected argument: $1"
+            exit 1
+        fi
+
+        break
+    fi
 done
 
 declare -A _explicit_commands=()

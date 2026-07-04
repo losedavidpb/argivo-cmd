@@ -4,7 +4,7 @@
 
 set -Eeuo pipefail
 
-# Check the syntax of an argivo script and its commands
+# Check the syntax of an argivo script
 function _argivo::check() {
     if (($# == 0)); then
         echo "error: no script provided for checking"
@@ -15,34 +15,24 @@ function _argivo::check() {
     local script="$1"
     shift
 
-    # Verbose mode is disabled by default, as the interpreter uses it
-    # when executing a script, and it may be too verbose for regular checks
+    # Verbose mode is disabled by default to avoid excessive output
+    # during script execution and regular checks
     local verbose=false
 
     # Check the verbose mode
     if [[ "${1:-}" == "--verbose" ]]; then
+        echo "Checking $(basename "$script")..."
         verbose=true
         shift
     fi
 
-    if [[ "$verbose" == "true" ]]; then
-        echo "Checking $(basename "$script")..."
-    fi
-
-    # Check that the script exists
-    if [[ ! -f "$script" ]]; then
-        echo "error: script not found"
-        exit 1
-    fi
-
-    # Check that the script is readable
-    if [[ ! -r "$script" ]]; then
-        echo "error: script is not readable"
-        exit 1
-    fi
-
     # Check that the script is a valid argivo script
     if ! _argivo::is_argivo_script "$script"; then
+        exit 1
+    fi
+
+    # Check that all directives are valid
+    if ! _argivo::check_directives; then
         exit 1
     fi
 
@@ -58,12 +48,6 @@ function _argivo::check() {
         exit 1
     fi
 
-    # Check that @hidden is not used in main
-    if ! _argivo::check_hidden "$script"; then
-        echo "error: main function cannot be marked as hidden"
-        exit 1
-    fi
-
     # Check that all exclusions are defined once at each function
     if ! _argivo::check_exclusions "$script"; then
         echo "error: duplicate exclusions found at a function"
@@ -73,6 +57,12 @@ function _argivo::check() {
     # Check that all requires are defined once with a valid function
     if ! _argivo::check_requires "$script"; then
         echo "error: duplicate or undefined required commands found"
+        exit 1
+    fi
+
+    # Check that the main function does only have valid annotations
+    if ! _argivo::check_main "$script"; then
+        echo "error: main function does have invalid annotations"
         exit 1
     fi
 
@@ -89,13 +79,12 @@ function _argivo::check() {
     # Show syntax validation results
     if [[ "$verbose" == "true" ]]; then
         echo
-        echo "✓ Script is readable"
         echo "✓ Script is a valid argivo script"
-        echo "✓ All command names are valid"
-        echo "✓ All command aliases are unique"
-        echo "✓ Main function is not marked as hidden"
-        echo "✓ All exclusions are unique at each function"
-        echo "✓ All requires are unique and valid at each function"
+        echo "✓ All directives are valid"
+        echo "✓ Command names are unique and valid"
+        echo "✓ Command aliases are unique and defined once per function"
+        echo "✓ Exclusions are consistent within each function"
+        echo "✓ Requires are valid and resolved at each function"
         echo "✓ All parameter types are supported"
         echo "✓ All parameter default values match their declared types"
 
@@ -106,9 +95,15 @@ function _argivo::check() {
     return 0
 }
 
-# Check if a script is a valid argivo script
+# Check that the script is valid for Argivo
 function _argivo::is_argivo_script() {
     local script="$1"
+
+    # Check that the script exists and is readable
+    if [[ ! -f "$script" || ! -r "$script" ]]; then
+        echo "error: script not found or is not readable"
+        return 1
+    fi
 
     # Check for the presence of the argivo shebang
     if ! head -n 1 "$script" | grep -q '^#!/usr/bin/env argivo'; then
@@ -122,10 +117,33 @@ function _argivo::is_argivo_script() {
         return 1
     fi
 
-    # Check for the presence of at least one user-defined command
-    if ! grep -Eq '^[[:space:]]*(function[[:space:]]+)?[a-zA-Z_][a-zA-Z0-9_]*[[:space:]]*(\(\))?' "$script"; then
-        echo "error: missing at least one user-defined command"
-        return 1
+    return 0
+}
+
+# Check that all directives in the script are valid
+function _argivo::check_directives() {
+    # Load all directives from the script
+    _argivo::load_directives
+
+    # Check if the script targets a specific major version of Argivo
+    if [[ -v _ARGIVO_DIRECTIVES[version] ]]; then
+        local required_version="${_ARGIVO_DIRECTIVES[version]}"
+
+        # Check that the "version" directive is a valid semantic version
+        if [[ ! "$required_version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "error: invalid @argivo version: $required_version."
+            return 1
+        fi
+
+        local required_major="${required_version%%.*}"
+        local current_major="${_ARGIVO_VERSION%%.*}"
+
+        # Check that the major version of the script matches
+        # the current version of Argivo
+        if [[ "$required_major" != "$current_major" ]]; then
+            echo "error: this script requires Argivo $required_major.x.x (current: $_ARGIVO_VERSION)."
+            return 1
+        fi
     fi
 
     return 0
@@ -160,27 +178,38 @@ function _argivo::check_aliases() {
     [[ -z "$duplicates" ]]
 }
 
-# Check that hidden is not applied to main
-function _argivo::check_hidden() {
+# Check that main exists and does only have valid annotations
+function _argivo::check_main() {
     local script="$1"
 
     local line
-    local hidden=false
+
+    # The main function should exist and it must not
+    # have any invalid annotation
+    local invalid=false
 
     while IFS= read -r line; do
-        # The function does contain the @hidden annotation
-        if [[ "$line" =~ ^[[:space:]]*#[[:space:]]*@hidden[[:space:]]*$ ]]; then
-            hidden=true
-            continue
+        # It is not neccesary to check more annotations if an invalid
+        # one for the main function has been detected
+        if [[ $invalid == false ]]; then
+            # An annotation has been detected
+            if [[ "$line" =~ ^[[:space:]]*#[[:space:]]*@([a-zA-Z_]+)[[:space:]]*.*$ ]]; then
+                local annotation="${BASH_REMATCH[1]}"
+
+                # The function does contain the annotation
+                [[ "$annotation" =~ ^(alias|req|excl|hidden)$ ]] && invalid=true
+
+                continue
+            fi
         fi
 
-        # Check if the main function includes @hidden
+        # Check that the main doesn't have any invalid annotation
         if [[ "$line" =~ ^[[:space:]]*(function[[:space:]]+)?main[[:space:]]*(\(\))? ]]; then
-            $hidden && return 1
+            [[ $invalid == true ]] && return 1
         fi
 
         # Any non-comment line breaks the annotation block
-        [[ ! "$line" =~ ^[[:space:]]*# ]] && hidden=false
+        [[ ! "$line" =~ ^[[:space:]]*# ]] && invalid=false
     done < "$script"
 
     return 0
@@ -271,7 +300,6 @@ function _argivo::check_requires() {
 
 # Check that all declared parameter types are supported
 function _argivo::check_param_types() {
-    # Annotations must be loaded first
     _argivo::load_annotations
 
     local key
@@ -292,7 +320,6 @@ function _argivo::check_param_types() {
 
 # Check that parameter default values match their declared types
 function _argivo::check_param_defaults() {
-    # Annotations must be loaded first
     _argivo::load_annotations
 
     local key

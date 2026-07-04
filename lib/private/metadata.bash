@@ -5,56 +5,56 @@
 set -Eeuo pipefail
 
 # Path for argivo configuration
-ARGIVO_CONF="/usr/local/lib/argivo/argivo.conf"
+_ARGIVO_CONF="/usr/local/lib/argivo/argivo.conf"
 
 # Check that the configuration file exists
-[[ ! -f "$ARGIVO_CONF" ]] && {
-    echo "error: argivo config file not found: $ARGIVO_CONF"
+[[ ! -f "$_ARGIVO_CONF" ]] && {
+    echo "error: argivo config file not found: $_ARGIVO_CONF"
     exit 1
 }
 
 # Check that the configuration file is readable
-[[ ! -r "$ARGIVO_CONF" ]] && {
-    echo "error: argivo config file is not readable: $ARGIVO_CONF"
+[[ ! -r "$_ARGIVO_CONF" ]] && {
+    echo "error: argivo config file is not readable: $_ARGIVO_CONF"
     exit 1
 }
 
 ## PROPERTIES ##
 
 # shellcheck disable=SC2034
-ARGIVO_NAME="$(
-    grep '^name[[:space:]]*=' "$ARGIVO_CONF" \
+_ARGIVO_NAME="$(
+    grep '^name[[:space:]]*=' "$_ARGIVO_CONF" \
         | sed -E 's/^[^"]*"([^"]+)".*/\1/'
 )"
 
 # shellcheck disable=SC2034
-ARGIVO_VERSION="$(
-    grep '^version[[:space:]]*=' "$ARGIVO_CONF" \
+_ARGIVO_VERSION="$(
+    grep '^version[[:space:]]*=' "$_ARGIVO_CONF" \
         | sed -E 's/^[^"]*"([^"]+)".*/\1/'
 )"
 
 # shellcheck disable=SC2034
-ARGIVO_DESCRIPTION="$(
-    grep '^description[[:space:]]*=' "$ARGIVO_CONF" \
+_ARGIVO_DESCRIPTION="$(
+    grep '^description[[:space:]]*=' "$_ARGIVO_CONF" \
         | sed -E 's/^[^"]*"([^"]+)".*/\1/'
 )"
 
 # shellcheck disable=SC2034
-ARGIVO_ABOUT="$(
-    sed -n '/^about *= *"""/,/^"""/p' "$ARGIVO_CONF" \
+_ARGIVO_ABOUT="$(
+    sed -n '/^about *= *"""/,/^"""/p' "$_ARGIVO_CONF" \
         | sed '1d;$d'
 )"
 
 # Print the current version of argivo
 function _argivo::version() {
-    echo "$ARGIVO_NAME $ARGIVO_VERSION"
+    echo "$_ARGIVO_NAME $_ARGIVO_VERSION"
 }
 
 # Print general information about argivo
 function _argivo::about() {
-    echo "$ARGIVO_NAME ($ARGIVO_VERSION) - $ARGIVO_DESCRIPTION"
+    echo "$_ARGIVO_NAME ($_ARGIVO_VERSION) - $_ARGIVO_DESCRIPTION"
     echo
-    echo "$ARGIVO_ABOUT"
+    echo "$_ARGIVO_ABOUT"
 }
 
 # Print help information for a specific command
