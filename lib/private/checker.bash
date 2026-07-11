@@ -6,6 +6,7 @@ set -Eeuo pipefail
 
 # Check the syntax of an argivo script
 function _argivo::check() {
+    # An argivo script must be provided
     if (($# == 0)); then
         echo "error: no script provided for checking"
         echo "usage: argivo --check <script>"
@@ -15,7 +16,7 @@ function _argivo::check() {
     local script="$1"
     shift
 
-    # Verbose mode is disabled by default to avoid excessive output
+    # Verbose is disabled by default to avoid excessive output
     # during script execution and regular checks
     local verbose=false
 
@@ -26,67 +27,24 @@ function _argivo::check() {
         shift
     fi
 
+    # There should not be more arguments
+    if (($# != 0)); then
+        echo "error: unexpected argument: $1"
+        exit 1
+    fi
+
     # Check that the script is a valid argivo script
-    if ! _argivo::is_argivo_script "$script"; then
-        exit 1
-    fi
+    _argivo::validate_script "$script" || exit 1
+    _argivo::validate_semantics "$script" || exit 1
 
-    # Check that all directives are valid
-    if ! _argivo::check_directives; then
-        exit 1
-    fi
-
-    # Check that all functions in the script have unique names
-    if ! _argivo::check_commands "$script"; then
-        echo "error: duplicate functions found"
-        exit 1
-    fi
-
-    # Check that all command aliases in the script have unique names
-    if ! _argivo::check_aliases "$script"; then
-        echo "error: duplicate command aliases found"
-        exit 1
-    fi
-
-    # Check that all exclusions are defined once at each function
-    if ! _argivo::check_exclusions "$script"; then
-        echo "error: duplicate exclusions found at a function"
-        exit 1
-    fi
-
-    # Check that all requires are defined once with a valid function
-    if ! _argivo::check_requires "$script"; then
-        echo "error: duplicate or undefined required commands found"
-        exit 1
-    fi
-
-    # Check that the main function does only have valid annotations
-    if ! _argivo::check_main "$script"; then
-        echo "error: main function does have invalid annotations"
-        exit 1
-    fi
-
-    # Check that defined types are valid
-    if ! _argivo::check_param_types; then
-        exit 1
-    fi
-
-    # Check that default values are defined based on its type
-    if ! _argivo::check_param_defaults; then
-        exit 1
-    fi
-
-    # Show syntax validation results
+    # Show validation results if verbose is active
     if [[ "$verbose" == "true" ]]; then
         echo
-        echo "✓ Script is a valid argivo script"
-        echo "✓ All directives are valid"
-        echo "✓ Command names are unique and valid"
-        echo "✓ Command aliases are unique and defined once per function"
-        echo "✓ Exclusions are consistent within each function"
-        echo "✓ Requires are valid and resolved at each function"
-        echo "✓ All parameter types are supported"
-        echo "✓ All parameter default values match their declared types"
+        echo "✓ Script structure and entry point are valid"
+        echo "✓ Directives and annotations are valid"
+        echo "✓ Command names and aliases are unique"
+        echo "✓ Command dependencies are valid"
+        echo "✓ Parameter definitions are valid"
 
         echo
         echo "No issues found"
@@ -95,18 +53,18 @@ function _argivo::check() {
     return 0
 }
 
-# Check that the script is valid for Argivo
-function _argivo::is_argivo_script() {
+# Perform basic checks of an Argivo script
+function _argivo::validate_script() {
     local script="$1"
 
-    # Check that the script exists and is readable
+    # The script must exist and be readable
     if [[ ! -f "$script" || ! -r "$script" ]]; then
         echo "error: script not found or is not readable"
         return 1
     fi
 
-    # Check for the presence of the argivo shebang
-    if ! head -n 1 "$script" | grep -q '^#!/usr/bin/env argivo'; then
+    # The argivo shebang should be included
+    if ! head -n1 "$script" | grep -qx '#!/usr/bin/env argivo'; then
         echo "error: missing argivo shebang"
         return 1
     fi
@@ -120,222 +78,393 @@ function _argivo::is_argivo_script() {
     return 0
 }
 
-# Check that all directives in the script are valid
-function _argivo::check_directives() {
-    # Load all directives from the script
-    _argivo::load_directives
-
-    # Check if the script targets a specific major version of Argivo
-    if [[ -v _ARGIVO_DIRECTIVES[version] ]]; then
-        local required_version="${_ARGIVO_DIRECTIVES[version]}"
-
-        # Check that the "version" directive is a valid semantic version
-        if [[ ! "$required_version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-            echo "error: invalid @argivo version: $required_version."
-            return 1
-        fi
-
-        local required_major="${required_version%%.*}"
-        local current_major="${_ARGIVO_VERSION%%.*}"
-
-        # Check that the major version of the script matches
-        # the current version of Argivo
-        if [[ "$required_major" != "$current_major" ]]; then
-            echo "error: this script requires Argivo $required_major.x.x (current: $_ARGIVO_VERSION)."
-            return 1
-        fi
-    fi
-
-    return 0
-}
-
-# Check that all functions in the script have unique names
-function _argivo::check_commands() {
+# Perform semantic validation of an Argivo script
+function _argivo::validate_semantics() {
     local script="$1"
 
-    local duplicates
+    # Flags to control the code sections
+    local is_directive_section=true
+    local waiting_for_open_brace=false
+    local is_function_section=false
+    local brace_depth=0
 
-    duplicates="$(
-        grep -E '^[[:space:]]*function[[:space:]]+[a-zA-Z_][a-zA-Z0-9_]*[[:space:]]*\(\)' "$script" |
-        sed -E 's/^[[:space:]]*function[[:space:]]+([a-zA-Z_][a-zA-Z0-9_]*).*/\1/' |
-        sort | uniq -d
-    )"
+    # Flags to track possible duplications
+    local -A functions=()
+    local -A aliases=()
+    local -A exclusions=()
+    local -A requires=()
 
-    [[ -z "$duplicates" ]]
-}
+    # Flags to track the state of the annotations
+    local hidden=false
+    local alias=""
 
-# Check that all command aliases in the script have unique names
-function _argivo::check_aliases() {
-    local script="$1"
-
-    local duplicates
-
-    duplicates="$(
-        grep -E '^[[:space:]]*#[[:space:]]*@alias[[:space:]]+' "$script" |
-        sed -E 's/.*@alias[[:space:]]+//' | sort | uniq -d
-    )"
-
-    [[ -z "$duplicates" ]]
-}
-
-# Check that main exists and does only have valid annotations
-function _argivo::check_main() {
-    local script="$1"
+    # Copy the function table since `unset` is used during validation and
+    # `_ARGIVO_FUNCTIONS` must remain intact for other checks
+    for function in "${!_ARGIVO_FUNCTIONS[@]}"; do
+        # shellcheck disable=SC2034
+        functions["$function"]=1
+    done
 
     local line
 
-    # The main function should exist and it must not
-    # have any invalid annotation
-    local invalid=false
-
     while IFS= read -r line; do
-        # It is not neccesary to check more annotations if an invalid
-        # one for the main function has been detected
-        if [[ $invalid == false ]]; then
-            # An annotation has been detected
-            if [[ "$line" =~ ^[[:space:]]*#[[:space:]]*@([a-zA-Z_]+)[[:space:]]*.*$ ]]; then
-                local annotation="${BASH_REMATCH[1]}"
+        # Empty or blank lines should not be considered
+        [[ "$line" =~ ^[[:space:]]*$ ]] && continue
 
-                # The function does contain the annotation
-                [[ "$annotation" =~ ^(alias|req|excl|hidden)$ ]] && invalid=true
-
+        # Waiting for the opening brace of a function declaration
+        if [[ "$waiting_for_open_brace" == true ]]; then
+            # The first non-blank line must be the opening brace
+            if [[ "$line" =~ ^[[:space:]]*\{([[:space:]]*#.*)?$ ]]; then
+                waiting_for_open_brace=false
+                brace_depth=1
                 continue
+            fi
+
+            echo "error: expected opening brace after function declaration"
+            return 1
+        fi
+
+        # Update function brace depth to only load annotations
+        # that appear before a function declaration and ignore
+        # annotations inside function bodies
+        if [[ "$is_function_section" == true ]]; then
+            _argivo::update_brace_depth "$line"
+
+            # The function body has ended once the
+            # brace depth reaches zero
+            if (( brace_depth == 0 )); then
+                is_function_section=false
             fi
         fi
 
-        # Check that the main doesn't have any invalid annotation
-        if [[ "$line" =~ ^[[:space:]]*(function[[:space:]]+)?main[[:space:]]*(\(\))? ]]; then
-            [[ $invalid == true ]] && return 1
+        local function_name=""
+
+        # Check for function definitions that use the "function" keyword
+        if [[ "$line" =~ ^[[:space:]]*function[[:space:]]+([a-zA-Z_][a-zA-Z0-9_]*)[[:space:]]*(\(\))?([[:space:]]*\{)?[[:space:]]*$ ]]; then
+            is_directive_section=false
+            function_name="${BASH_REMATCH[1]}"
+
+        # Check for function definitions that do not use the "function" keyword
+        elif [[ -z "$function_name" ]] && [[ "$line" =~ ^[[:space:]]*([a-zA-Z_][a-zA-Z0-9_]*)[[:space:]]*\(\)([[:space:]]*\{)?[[:space:]]*$ ]]; then
+            is_directive_section=false
+            function_name="${BASH_REMATCH[1]}"
         fi
 
-        # Any non-comment line breaks the annotation block
-        [[ ! "$line" =~ ^[[:space:]]*# ]] && invalid=false
-    done < "$script"
+        # A new function definition has been declared
+        if [[ -n "$function_name" ]]; then
+            is_directive_section=false
 
-    return 0
-}
+            # Annotations must not be used inside the function
+            is_function_section=true
+            brace_depth=0
 
-# Check that all exclusions are defined once at each function
-function _argivo::check_exclusions() {
-    local script="$1"
+            # The opening brace may appear on the next non-blank line
+            if [[ "$line" == *"{"* ]]; then
+                brace_depth=1
+            else
+                waiting_for_open_brace=true
+            fi
 
-    local line
-    local -A exclusions=()
+            # The main function cannot have certain annotations
+            if [[ "$function_name" == "main" ]]; then
+                if [[ -n "${requires[*]}" || -n "${exclusions[*]}" || "$hidden" == true || -n "$alias" ]]; then
+                    echo "error: main function cannot use @alias, @req, @excl or @hidden"
+                    return 1
+                fi
+            fi
 
-    while IFS= read -r line; do
-        # Reset exclusions for the new function
-        if [[ "$line" =~ ^[[:space:]]*(function[[:space:]]+)?[a-zA-Z_][a-zA-Z0-9_]*[[:space:]]*(\(\))? ]]; then
+            # Function names must be unique
+            if ! unset "functions[$function_name]"; then
+                echo "error: duplicate function: $function_name"
+                return 1
+            fi
+
+            # Reset flags for the new function
+            hidden=false
+            alias=""
             exclusions=()
-            continue
-        fi
-
-        # Check exclusions for current function
-        if [[ "$line" =~ ^[[:space:]]*#[[:space:]]*@excl[[:space:]]+([a-zA-Z_][a-zA-Z0-9_]*([[:space:]]+[a-zA-Z_][a-zA-Z0-9_]*)*)[[:space:]]*$ ]]; then
-            local group
-
-            for group in ${BASH_REMATCH[1]}; do
-                if [[ -n "${exclusions[$group]:-}" ]]; then
-                    return 1
-                fi
-
-                exclusions["$group"]=1
-            done
-        fi
-    done < "$script"
-
-    return 0
-}
-
-# Check that all requires are valid and defined once at each function
-function _argivo::check_requires() {
-    local script="$1"
-
-    local line
-    local -A functions=()
-    local -A requires=()
-
-    # Collect all function values before checking its dependencies
-    while IFS= read -r line; do
-        if [[ "$line" =~ ^[[:space:]]*function[[:space:]]+([a-zA-Z_][a-zA-Z0-9_]*) ]]; then
-            functions["${BASH_REMATCH[1]}"]=1
-            continue
-        fi
-
-        if [[ "$line" =~ ^[[:space:]]*([a-zA-Z_][a-zA-Z0-9_]*)[[:space:]]*\(\) ]]; then
-            functions["${BASH_REMATCH[1]}"]=1
-        fi
-    done < "$script"
-
-    while IFS= read -r line; do
-        # Reset requires for the new function
-        if [[ "$line" =~ ^[[:space:]]*(function[[:space:]]+)?[a-zA-Z_][a-zA-Z0-9_]*[[:space:]]*(\(\))? ]]; then
             requires=()
+
             continue
         fi
 
-        # Check requires for current function
-        if [[ "$line" =~ ^[[:space:]]*#[[:space:]]*@req[[:space:]]+([a-zA-Z_][a-zA-Z0-9_]*([[:space:]]+[a-zA-Z_][a-zA-Z0-9_]*)*)[[:space:]]*$ ]]; then
-            local required
+        # Check for annotations and directives in the script
+        if [[ "$line" =~ ^[[:space:]]*#[[:space:]]*@([[:alpha:]_][[:alnum:]_-]*)[[:space:]]*(.*)?$ ]]; then
+            local annotation="${BASH_REMATCH[1]}"
+            local value="${BASH_REMATCH[2]}"
 
-            for required in ${BASH_REMATCH[1]}; do
-                # Duplicate require
-                if [[ -n "${requires[$required]:-}" ]]; then
-                    echo "error: duplicate require: $required"
+            case $annotation in
+                argivo)
+                    # Directives can only be defined before any function
+                    if [[ "$is_directive_section" == false ]]; then
+                        echo "error: @argivo directives must be declared before the first function"
+                        return 1
+                    fi
+
+                    # @argivo requires a value
+                    if [[ -z "$value" ]]; then
+                        echo "error: @argivo annotation requires a value"
+                        return 1
+                    fi
+
+                    # Validate syntax
+                    if ! [[ "$value" =~ ^([a-zA-Z_][a-zA-Z0-9_-]*)=([^[:space:]]+)$ ]]; then
+                        echo "error: invalid @argivo syntax"
+                        return 1
+                    fi
+
+                    local directive="${BASH_REMATCH[1]}"
+                    local directive_value="${BASH_REMATCH[2]}"
+
+                    case "$directive" in
+                        check)
+                            # Check that the value is boolean
+                            if [[ ! "$directive_value" =~ ^(true|false)$ ]]; then
+                                echo "error: invalid @argivo check: $directive_value"
+                                return 1
+                            fi
+                        ;;
+
+                        version)
+                            # Check that the version is a valid semantic version
+                            if [[ ! "$directive_value" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+                                echo "error: invalid @argivo version: $directive_value"
+                                return 1
+                            fi
+
+                            local required_major="${directive_value%%.*}"
+                            local current_major="${_ARGIVO_VERSION%%.*}"
+
+                            # Check that the major version matches
+                            if [[ "$required_major" != "$current_major" ]]; then
+                                echo "error: this script requires Argivo $required_major.x.x (current: $_ARGIVO_VERSION)"
+                                return 1
+                            fi
+                        ;;
+
+                        *)
+                            echo "error: unsupported @argivo directive: $directive"
+                            return 1
+                        ;;
+                    esac
+                ;;
+
+                desc)
+                    is_directive_section=false
+
+                    # Annotations must be declared outside functions
+                    if [[ "$is_function_section" == true ]]; then
+                        echo "error: @desc cannot appear inside a function"
+                        return 1
+                    fi
+
+                    # @desc requires a value
+                    if [[ -z "$value" ]]; then
+                        echo "error: @desc annotation requires a value"
+                        return 1
+                    fi
+                ;;
+
+                param)
+                    is_directive_section=false
+
+                    # Annotations must be declared outside functions
+                    if [[ "$is_function_section" == true ]]; then
+                        echo "error: @param cannot appear inside a function"
+                        return 1
+                    fi
+
+                    # @param requires a value
+                    if [[ -z "$value" ]]; then
+                        echo "error: @param annotation requires a value"
+                        return 1
+                    fi
+
+                    # Validate syntax
+                    if ! [[ "$value" =~ ^[a-zA-Z_][a-zA-Z0-9_]*([[:space:]]+type=[a-zA-Z_][a-zA-Z0-9_]*([[:space:]]+default=[^[:space:]]+)?)?([[:space:]]+optional)?([[:space:]]+.+)?$ ]]; then
+                        echo "error: invalid @param syntax"
+                        return 1
+                    fi
+
+                    # Check if type is supported
+                    if [[ "$value" =~ [[:space:]]type=([^[:space:]]+) ]]; then
+                        local type="${BASH_REMATCH[1]}"
+                        local validator="argivo::is_$type"
+
+                        if ! declare -F "$validator" >/dev/null; then
+                            echo "error: unknown parameter type: $type"
+                            return 1
+                        fi
+                    fi
+
+                    # Check if default is a valid value based on its type
+                    if [[ "$value" =~ [[:space:]]default=([^[:space:]]+) ]]; then
+                        local default="${BASH_REMATCH[1]}"
+
+                        if [[ -n "${type:-}" ]]; then
+                            local validator="argivo::is_$type"
+
+                            if ! "$validator" "$default"; then
+                                local parameter="${value%% *}"
+
+                                echo "error: invalid default value '$default' for parameter '$parameter'"
+                                return 1
+                            fi
+                        fi
+                    fi
+                ;;
+
+                alias)
+                    is_directive_section=false
+
+                    # Annotations must be declared outside functions
+                    if [[ "$is_function_section" == true ]]; then
+                        echo "error: @alias cannot appear inside a function"
+                        return 1
+                    fi
+
+                    # @alias requires a value
+                    if [[ -z "$value" ]]; then
+                        echo "error: @alias annotation requires a value"
+                        return 1
+                    fi
+
+                    # Alias must be a valid identifier
+                    if ! [[ "$value" =~ ^[a-zA-Z_][a-zA-Z0-9_]*$ ]]; then
+                        echo "error: invalid @alias syntax"
+                        return 1
+                    fi
+
+                    # Alias must be unique
+                    if [[ -n "${aliases[$value]:-}" ]]; then
+                        echo "error: duplicate alias: $value"
+                        return 1
+                    fi
+
+                    aliases["$value"]=1
+                    alias="$value"
+                ;;
+
+                hidden)
+                    is_directive_section=false
+
+                    # Annotations must be declared outside functions
+                    if [[ "$is_function_section" == true ]]; then
+                        echo "error: @hidden cannot appear inside a function"
+                        return 1
+                    fi
+
+                    # @hidden does not require a value
+                    if [[ -n "$value" ]]; then
+                        echo "error: @hidden annotation should not have a value"
+                        return 1
+                    fi
+
+                    # Used to check that the main function
+                    # does not use @hidden
+                    hidden=true
+                ;;
+
+                example)
+                    is_directive_section=false
+
+                    # Annotations must be declared outside functions
+                    if [[ "$is_function_section" == true ]]; then
+                        echo "error: @example cannot appear inside a function"
+                        return 1
+                    fi
+
+                    # @example requires a value
+                    if [[ -z "$value" ]]; then
+                        echo "error: @example annotation requires a value"
+                        return 1
+                    fi
+                ;;
+
+                excl)
+                    is_directive_section=false
+
+                    # Annotations must be declared outside functions
+                    if [[ "$is_function_section" == true ]]; then
+                        echo "error: @excl cannot appear inside a function"
+                        return 1
+                    fi
+
+                    # @excl requires a value
+                    if [[ -z "$value" ]]; then
+                        echo "error: @excl annotation requires a value"
+                        return 1
+                    fi
+
+                    # Validate syntax
+                    if ! [[ "$value" =~ ^[a-zA-Z_][a-zA-Z0-9_]*([[:space:]]+[a-zA-Z_][a-zA-Z0-9_]*)*$ ]]; then
+                        echo "error: invalid @excl syntax"
+                        return 1
+                    fi
+
+                    local group
+
+                    # Check for duplicate exclusion groups within the same function
+                    for group in $value; do
+                        if [[ -n "${exclusions[$group]:-}" ]]; then
+                            echo "error: duplicate exclusion group '$group'"
+                            return 1
+                        fi
+
+                        exclusions["$group"]=1
+                    done
+                ;;
+
+                req)
+                    is_directive_section=false
+
+                    # Annotations must be declared outside functions
+                    if [[ "$is_function_section" == true ]]; then
+                        echo "error: @req cannot appear inside a function"
+                        return 1
+                    fi
+
+                    # @req requires a value
+                    if [[ -z "$value" ]]; then
+                        echo "error: @req annotation requires a value"
+                        return 1
+                    fi
+
+                    # Validate syntax
+                    if ! [[ "$value" =~ ^[a-zA-Z_][a-zA-Z0-9_]*([[:space:]]+[a-zA-Z_][a-zA-Z0-9_]*)*$ ]]; then
+                        echo "error: invalid @req syntax"
+                        return 1
+                    fi
+
+                    local required
+
+                    # Check for duplicate required commands within the same function
+                    for required in $value; do
+                        # Duplicate require
+                        if [[ -n "${requires[$required]:-}" ]]; then
+                            echo "error: duplicate require: $required"
+                            return 1
+                        fi
+
+                        # Required function does not exist
+                        if [[ -z "${_ARGIVO_FUNCTIONS[$required]:-}" ]]; then
+                            echo "error: unknown required command: $required"
+                            return 1
+                        fi
+
+                        requires["$required"]=1
+                    done
+                ;;
+
+                # The annotation or directive is not supported
+                *)
+                    echo "error: unsupported annotation or directive: $annotation"
                     return 1
-                fi
+                ;;
+            esac
 
-                # Required function does not exist
-                if [[ -z "${functions[$required]:-}" ]]; then
-                    echo "error: unknown required command: $required"
-                    return 1
-                fi
-
-                requires["$required"]=1
-            done
         fi
     done < "$script"
-
-    return 0
-}
-
-# Check that all declared parameter types are supported
-function _argivo::check_param_types() {
-    _argivo::load_annotations
-
-    local key
-
-    for key in "${!_ARGIVO_PARAM_TYPES[@]}"; do
-        [[ -z "${_ARGIVO_PARAM_TYPES[$key]}" ]] && continue
-
-        local validator="argivo::is_${_ARGIVO_PARAM_TYPES[$key]}"
-
-        if ! declare -F "$validator" >/dev/null; then
-            echo "error: unknown parameter type: ${_ARGIVO_PARAM_TYPES[$key]} for '$key'"
-            return 1
-        fi
-    done
-
-    return 0
-}
-
-# Check that parameter default values match their declared types
-function _argivo::check_param_defaults() {
-    _argivo::load_annotations
-
-    local key
-
-    for key in "${!_ARGIVO_PARAM_DEFAULTS[@]}"; do
-        [[ -z "${_ARGIVO_PARAM_DEFAULTS[$key]}" ]] && continue
-        [[ -z "${_ARGIVO_PARAM_TYPES[$key]}" ]] && continue
-
-        local validator="argivo::is_${_ARGIVO_PARAM_TYPES[$key]}"
-
-        # Check default value based on its type
-        if ! "$validator" "${_ARGIVO_PARAM_DEFAULTS[$key]}"; then
-            echo "error: invalid default value '${_ARGIVO_PARAM_DEFAULTS[$key]}' for '$key'"
-            return 1
-        fi
-    done
 
     return 0
 }

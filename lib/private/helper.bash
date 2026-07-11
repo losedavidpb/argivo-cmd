@@ -13,11 +13,6 @@ function _argivo::help_script() {
     # shellcheck disable=SC2154
     script_name="$(basename "$_script")"
 
-    # Load descriptions if not already loaded
-    if ! $_ARGIVO_ANNOTATIONS_LOADED; then
-        _argivo::load_annotations
-    fi
-
     # If a specific command is provided, show help for that command
     if [[ -n "${1:-}" ]]; then
         _argivo::help_cmd "$script_name" "$1"
@@ -158,17 +153,12 @@ function _argivo::print_help() {
         local param
 
         for param in ${_ARGIVO_PARAMS[$command]}; do
-            local key type meta
-
-            key="$command:$param"
-            meta=""
+            local key="$command:$param"
+            local meta=""
 
             # Add parameter type if it is not the default text type
-            type="${_ARGIVO_PARAM_TYPES[$key]:-text}"
-
-            if [[ "$type" != "text" ]]; then
-                meta="$type"
-            fi
+            local type="${_ARGIVO_PARAM_TYPES[$key]:-}"
+            [[ -n "$type" ]] && meta="type=$type"
 
             # Add default value to the parameter metadata
             if [[ -n "${_ARGIVO_PARAM_DEFAULTS[$key]:-}" ]]; then
@@ -260,21 +250,6 @@ function _argivo::print_help() {
     fi
 }
 
-# Get the length of the longest parameter description
-function _argivo::max_param_description_length() {
-    local command="$1"
-
-    local max_descr=0
-    local param
-
-    for param in ${_ARGIVO_PARAMS[$command]:-}; do
-        local descr="${_ARGIVO_PARAM_DESCRIPTIONS["$command:$param"]:-}"
-        ((${#descr} > max_descr)) && max_descr=${#descr}
-    done
-
-    printf '%s\n' "$max_descr"
-}
-
 # Generate usage string for a given command based on its parameters
 function _argivo::usage() {
     local command="$1"
@@ -297,4 +272,19 @@ function _argivo::usage() {
     done
 
     printf '%s\n' "$usage"
+}
+
+# Get the length of the longest parameter description
+function _argivo::max_param_description_length() {
+    local command="$1"
+
+    local max_descr=0
+    local param
+
+    for param in ${_ARGIVO_PARAMS[$command]:-}; do
+        local descr="${_ARGIVO_PARAM_DESCRIPTIONS["$command:$param"]:-}"
+        ((${#descr} > max_descr)) && max_descr=${#descr}
+    done
+
+    printf '%s\n' "$max_descr"
 }

@@ -7,16 +7,15 @@ set -Eeuo pipefail
 # Directives for configuring the interpreter
 declare -A  _ARGIVO_DIRECTIVES
 
-# Check if directives have already been loaded
-# shellcheck disable=SC2034
-_ARGIVO_DIRECTIVES_LOADED=false
-
 # Description of the script, if provided by the user
 _ARGIVO_SCRIPT_DESCRIPTION=""
 
 # Check if annotations have already been loaded
 # shellcheck disable=SC2034
 _ARGIVO_ANNOTATIONS_LOADED=false
+
+# User-defined functions
+declare -A _ARGIVO_FUNCTIONS
 
 # Annotations for user-defined functions
 declare -A _ARGIVO_DESCRIPTIONS
@@ -33,42 +32,19 @@ declare -A _ARGIVO_PARAM_DEFAULTS
 declare -A _ARGIVO_PARAM_OPTIONAL
 declare -A _ARGIVO_PARAM_DESCRIPTIONS
 
-# Load all directives from the script
-function _argivo::load_directives() {
-    # Directives only need to be parsed once, as they are only used by
-    # internal commands that are cached after the first execution
-    $_ARGIVO_DIRECTIVES_LOADED && return
-
-    local line
-
-    # shellcheck disable=SC2154
-    while IFS= read -r line; do
-        # Check for directives in the form of:
-        # @argivo key=value
-        if [[ "$line" =~ ^[[:space:]]*#[[:space:]]*@argivo[[:space:]]+([a-zA-Z_][a-zA-Z0-9_-]*)=(.*)$ ]]; then
-            local key="${BASH_REMATCH[1]}"
-            local value="${BASH_REMATCH[2]}"
-
-            _ARGIVO_DIRECTIVES["$key"]="$value"
-        fi
-
-        # Directives should not be defined after the first function definition
-        if [[ "$line" =~ ^[[:space:]]*(function[[:space:]]+)?([a-zA-Z_][a-zA-Z0-9_]*)([[:space:]]*\(\))? ]]; then
-            break
-        fi
-    done < "$_script"
-
-    # Mark directives as loaded to avoid re-parsing the script
-    _ARGIVO_DIRECTIVES_LOADED=true
-}
-
 # Load all annotations from the script
 function _argivo::load_annotations() {
-    # Annotations only need to be parsed once, as they are only used by
-    # internal commands that are cached after the first execution
+    # Annotations should only need to be parsed once
+    # for each argivo script
     $_ARGIVO_ANNOTATIONS_LOADED && return
 
     local line
+
+    # Flags to control the code sections
+    local is_directive_section=true
+    local is_function_section=false
+    local waiting_for_open_brace=false
+    local brace_depth=0
 
     # Function annotations with a single value
     local curr_descr=""
@@ -96,66 +72,128 @@ function _argivo::load_annotations() {
 
     # shellcheck disable=SC2154
     while IFS= read -r line; do
+        # Empty or blank lines should not be considered
+        [[ "$line" =~ ^[[:space:]]*$ ]] && continue
+
+        # Waiting for the opening brace of a function declaration
+        if [[ "$waiting_for_open_brace" == true ]]; then
+            # The first non-blank line must be the opening brace
+            if [[ "$line" =~ ^[[:space:]]*\{([[:space:]]*#.*)?$ ]]; then
+                waiting_for_open_brace=false
+                brace_depth=1
+                continue
+            fi
+
+            # Treat it as an invalid function definition
+            waiting_for_open_brace=false
+            is_function_section=false
+        fi
+
+        # Update function brace depth to only load annotations
+        # that appear before a function declaration and ignore
+        # annotations inside function bodies
+        if [[ "$is_function_section" == true ]]; then
+            _argivo::update_brace_depth "$line"
+
+            # The function body has ended once the
+            # brace depth reaches zero
+            if (( brace_depth == 0 )); then
+                is_function_section=false
+            fi
+        fi
+
+        # Check for directives in the form of:
+        # @argivo key=value
+        if [[ "$line" =~ ^[[:space:]]*#[[:space:]]*@argivo[[:space:]]+([a-zA-Z_][a-zA-Z0-9_-]*)=(.*)$ ]]; then
+            # Directives can only be used before the first
+            # annotation or function declaration
+            if [[ "$is_directive_section" == true ]]; then
+                local directive_key="${BASH_REMATCH[1]}"
+                local directive_value="${BASH_REMATCH[2]}"
+
+                _ARGIVO_DIRECTIVES["$directive_key"]="$directive_value"
+            fi
+
+            continue
+        fi
+
         # Check for hidden comments in the form of:
         # @hidden
         if [[ "$line" =~ ^[[:space:]]*#[[:space:]]*@hidden[[:space:]]*$ ]]; then
-            curr_hidden=true
+            is_directive_section=false
+
+            # Annotations must only be used before the function declaration
+            if [[ "$is_function_section" == false ]]; then
+                curr_hidden=true
+            fi
+
             continue
         fi
 
         # Check for description comments in the form of:
         # @desc This is a description for a function
         if [[ "$line" =~ ^[[:space:]]*#[[:space:]]*@desc[[:space:]]+(.*)$ ]]; then
-            curr_descr="${BASH_REMATCH[1]}"
+            is_directive_section=false
+
+            # Annotations must only be used before the function declaration
+            if [[ "$is_function_section" == false ]]; then
+                curr_descr="${BASH_REMATCH[1]}"
+            fi
+
             continue
         fi
 
         # Check for parameter comments in the form of:
         # @param name [type=value] [default=value] [optional] Description
         if [[ "$line" =~ ^[[:space:]]*#[[:space:]]*@param[[:space:]]+([a-zA-Z_][a-zA-Z0-9_]*)([[:space:]]+.*)?$ ]]; then
-            read -r -a parts <<< "${BASH_REMATCH[2]}"
+            is_directive_section=false
 
-            param_descr=""
-            param_name="${BASH_REMATCH[1]}"
-            param_type=""
-            param_default=""
-            param_optional=false
+            # Annotations must only be used before the function declaration
+            if [[ "$is_function_section" == false ]]; then
+                read -r -a parts <<< "${BASH_REMATCH[2]}"
 
-            local i
+                param_descr=""
+                param_name="${BASH_REMATCH[1]}"
+                param_type=""
+                param_default=""
+                param_optional=false
 
-            # Properties of the parameter
-            for ((i = 1; i < ${#parts[@]}; i++)); do
-                local token="${parts[$i]}"
+                local i
 
-                # Type comment
-                if [[ "$token" =~ ^type=(.+)$ ]]; then
-                    param_type="${BASH_REMATCH[1]}"
-                    continue
-                fi
+                # Properties of the parameter
+                for ((i = 0; i < ${#parts[@]}; i++)); do
+                    local token="${parts[$i]}"
 
-                # Default comment
-                if [[ "$token" =~ ^default=(.+)$ ]]; then
-                    param_default="${BASH_REMATCH[1]}"
-                    continue
-                fi
+                    # Type comment
+                    if [[ "$token" =~ ^type=(.+)$ ]]; then
+                        param_type="${BASH_REMATCH[1]}"
+                        continue
+                    fi
 
-                # Optional comment
-                if [[ "$token" == "optional" ]]; then
-                    param_optional=true
-                    continue
-                fi
+                    # Default comment
+                    if [[ "$token" =~ ^default=(.+)$ ]]; then
+                        param_default="${BASH_REMATCH[1]}"
+                        continue
+                    fi
 
-                # First token that is not metadata starts the description
-                param_descr="${parts[*]:$i}"
-                break
-            done
+                    # Optional comment
+                    if [[ "$token" == "optional" ]]; then
+                        param_optional=true
+                        continue
+                    fi
 
-            curr_params+=("$param_name")
+                    # First token that is not metadata starts the description
+                    param_descr="${parts[*]:$i}"
+                    break
+                done
 
-            curr_param_descr["$param_name"]="$param_descr"
-            curr_param_types["$param_name"]="$param_type"
-            curr_param_defaults["$param_name"]="$param_default"
-            curr_param_optional["$param_name"]="$param_optional"
+                curr_params+=("$param_name")
+
+                curr_param_descr["$param_name"]="$param_descr"
+                curr_param_types["$param_name"]="$param_type"
+                curr_param_defaults["$param_name"]="$param_default"
+                curr_param_optional["$param_name"]="$param_optional"
+            fi
 
             continue
         fi
@@ -163,48 +201,87 @@ function _argivo::load_annotations() {
         # Check for examples in the form of:
         # @example This is an example for a function
         if [[ "$line" =~ ^[[:space:]]*#[[:space:]]*@example[[:space:]]+(.*)$ ]]; then
-            curr_examples+=("${BASH_REMATCH[1]}")
+            is_directive_section=false
+
+            # Annotations must only be used before the function declaration
+            if [[ "$is_function_section" == false ]]; then
+                curr_examples+=("${BASH_REMATCH[1]}")
+            fi
+
             continue
         fi
 
         # Check for alias comments in the form of:
         # @alias alias_name
         if [[ "$line" =~ ^[[:space:]]*#[[:space:]]*@alias[[:space:]]+([a-zA-Z_][a-zA-Z0-9_]*)[[:space:]]*$ ]]; then
-            curr_alias="${BASH_REMATCH[1]}"
+            is_directive_section=false
+
+            # Annotations must only be used before the function declaration
+            if [[ "$is_function_section" == false ]]; then
+                curr_alias="${BASH_REMATCH[1]}"
+            fi
+
             continue
         fi
 
         # Check for exclusion comments in the form of:
         # @excl exclusion_name
         if [[ "$line" =~ ^[[:space:]]*#[[:space:]]*@excl[[:space:]]+([a-zA-Z_][a-zA-Z0-9_]*([[:space:]]+[a-zA-Z_][a-zA-Z0-9_]*)*)[[:space:]]*$ ]]; then
-            read -r -a exclusions <<< "${BASH_REMATCH[1]}"
-            curr_exclusions+=("${exclusions[@]}")
+            is_directive_section=false
+
+            # Annotations must only be used before the function declaration
+            if [[ "$is_function_section" == false ]]; then
+                read -r -a exclusions <<< "${BASH_REMATCH[1]}"
+                curr_exclusions+=("${exclusions[@]}")
+            fi
+
             continue
         fi
 
         # Check for requires comments in the form of:
         # @req function_name
         if [[ "$line" =~ ^[[:space:]]*#[[:space:]]*@req[[:space:]]+([a-zA-Z_][a-zA-Z0-9_]*([[:space:]]+[a-zA-Z_][a-zA-Z0-9_]*)*)[[:space:]]*$ ]]; then
-            read -r -a requires <<< "${BASH_REMATCH[1]}"
-            curr_requires+=("${requires[@]}")
+            is_directive_section=false
+
+            # Annotations must only be used before the function declaration
+            if [[ "$is_function_section" == false ]]; then
+                read -r -a requires <<< "${BASH_REMATCH[1]}"
+                curr_requires+=("${requires[@]}")
+            fi
+
             continue
         fi
 
         local function_name=""
 
         # Check for function definitions that use the "function" keyword
-        if [[ "$line" =~ ^[[:space:]]*function[[:space:]]+([a-zA-Z_][a-zA-Z0-9_]*) ]]; then
+        if [[ "$line" =~ ^[[:space:]]*function[[:space:]]+([a-zA-Z_][a-zA-Z0-9_]*)[[:space:]]*(\(\))?([[:space:]]*\{)?[[:space:]]*$ ]]; then
+            is_directive_section=false
             function_name="${BASH_REMATCH[1]}"
-        fi
 
         # Check for function definitions that do not use the "function" keyword
-        if [[ -z "$function_name" ]] && [[ "$line" =~ ^[[:space:]]*([a-zA-Z_][a-zA-Z0-9_]*)[[:space:]]*\(\) ]]; then
+        elif [[ -z "$function_name" ]] && [[ "$line" =~ ^[[:space:]]*([a-zA-Z_][a-zA-Z0-9_]*)[[:space:]]*\(\)([[:space:]]*\{)?[[:space:]]*$ ]]; then
+            is_directive_section=false
             function_name="${BASH_REMATCH[1]}"
         fi
 
         # Associate the collected description and parameters
         # of the current function with its name, if we found a function definition
         if [[ -n "$function_name" ]]; then
+            # Annotations must not be used inside the function
+            is_function_section=true
+            brace_depth=0
+
+            # The opening brace may appear on the next non-blank line
+            if [[ "$line" == *"{"* ]]; then
+                brace_depth=1
+            else
+                waiting_for_open_brace=true
+            fi
+
+            # Store the function name for future checks
+            _ARGIVO_FUNCTIONS["$function_name"]=1
+
             # Hidden functions
             _ARGIVO_HIDDEN["$function_name"]="$curr_hidden"
             curr_hidden=false
@@ -287,17 +364,14 @@ function _argivo::load_annotations() {
 # internal to argivo, private, or marked as hidden
 function _argivo::get_commands() {
     local cmd
-    local commands
 
-    # Get all declared user-defined functions
-    commands="$(declare -F | awk '{print $3}' | grep -Ev '^(argivo::|_|main$)')"
-    [[ -z "$commands" ]] && return
-
-    # Skip commands marked with the @hidden annotation
-    while read -r cmd; do
+    for cmd in "${!_ARGIVO_FUNCTIONS[@]}"; do
+        [[ "$cmd" == "main" ]] && continue
+        [[ "$cmd" == _* ]] && continue
         [[ "${_ARGIVO_HIDDEN[$cmd]:-}" == "true" ]] && continue
+
         printf '%s\n' "$cmd"
-    done <<< "$commands"
+    done | sort
 }
 
 # Get the alias of a given function, if it exists
@@ -342,4 +416,52 @@ function _argivo::get_requires() {
     done
 
     printf '%s\n' "${!requires[@]}" | sort
+}
+
+# Update the current function brace depth while ignoring braces
+# that appear inside quoted strings or comments
+function _argivo::update_brace_depth() {
+    local line="$1"
+    local i c
+    local in_single=false
+    local in_double=false
+    local escaped=false
+
+    for ((i=0; i<${#line}; i++)); do
+        c="${line:i:1}"
+
+        # Ignore everything inside single-quoted strings
+        if $in_single; then
+            [[ "$c" == "'" ]] && in_single=false
+            continue
+        fi
+
+        # Ignore everything inside double-quoted strings,
+        # taking escaped characters into account
+        if $in_double; then
+            if $escaped; then
+                escaped=false
+                continue
+            fi
+
+            # Track escape sequences and detect the closing quote
+            case "$c" in
+                \\)  escaped=true    ;;
+                '"') in_double=false ;;
+            esac
+
+            continue
+        fi
+
+        # Ignore the rest of the line after a comment begins
+        [[ "$c" == "#" ]] && break
+
+        # Handle quote delimiters and update the brace depth
+        case "$c" in
+            "'") in_single=true     ;;
+            '"') in_double=true     ;;
+            "{") ((brace_depth++))  ;;
+            "}") ((brace_depth--))  ;;
+        esac
+    done
 }

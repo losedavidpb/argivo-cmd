@@ -54,85 +54,92 @@ case "$1" in
         source "$_argivo_private_lib/metadata.bash"
         _argivo::version
         exit 0
-        ;;
+    ;;
 
     --about|-a)
         # shellcheck source=/dev/null
         source "$_argivo_private_lib/metadata.bash"
         _argivo::about
         exit 0
-        ;;
+    ;;
 
     --help|-h)
         # shellcheck source=/dev/null
         source "$_argivo_private_lib/metadata.bash"
         _argivo::help
         exit 0
-        ;;
+    ;;
 
     --check|-c)
+        # Check that there are enough parameters
+        if (($# < 2 )); then
+            echo "error: the script to be checked is not defined"
+            exit 1
+        fi
+
+        shift
+
+        # Get the script to be interpreted
+        _script="$1"
+        shift
+
+        # Check that the script exists
+        if [[ ! -f "$_script" ]]; then
+            echo "error: script not found: $_script"
+            exit 1
+        fi
+
         # shellcheck source=/dev/null
         source "$_argivo_private_lib/parser.bash"
 
-
+        # Load annotations before checking the script
+        _argivo::load_annotations
 
         # shellcheck source=/dev/null
         source "$_argivo_private_lib/metadata.bash"
 
         # shellcheck source=/dev/null
         source "$_argivo_private_lib/checker.bash"
-        shift
 
-        _script="$1"
-        _argivo::check "$@" --verbose
+        # Check that the script is a valid argivo script
+        _argivo::check "$_script" --verbose
         exit 0
-        ;;
+    ;;
 esac
 
 # Get the script to be interpreted
 _script="$1"
 shift
 
-# Check that the script exists
-if [[ ! -f "$_script" ]]; then
-    echo "error: script not found: $_script"
-    exit 1
+# The script must exist and be readable
+if [[ ! -f "$_script" || ! -r "$_script" ]]; then
+    echo "error: script not found or is not readable"
+    return 1
 fi
-
-# Check that the script is readable
-if [[ ! -r "$_script" ]]; then
-    echo "error: script is not readable: $_script"
-    exit 1
-fi
-
-(
-    # shellcheck source=/dev/null
-    source "$_argivo_private_lib/parser.bash"
-
-    # Load all directives from the script
-    _argivo::load_directives
-
-    # shellcheck source=/dev/null
-    source "$_argivo_private_lib/metadata.bash"
-
-    # shellcheck source=/dev/null
-    source "$_argivo_private_lib/checker.bash"
-
-    # Check that the script is a valid argivo script
-    if ! _argivo::check "$_script"; then
-        exit 1
-    fi
-)
-
-# Load the script the user wants to run
-# shellcheck source=/dev/null
-source "$_script"
 
 # shellcheck source=/dev/null
 source "$_argivo_private_lib/parser.bash"
 
-# Load command metadata
+# Load annotations before checking the script
 _argivo::load_annotations
+
+# shellcheck source=/dev/null
+source "$_argivo_private_lib/metadata.bash"
+
+# shellcheck source=/dev/null
+source "$_argivo_private_lib/checker.bash"
+
+# Run the check when the @argivo check directive is missing,
+# set to "true", or has any value other than "false"
+if [[ ! -v _ARGIVO_DIRECTIVES["check"] || "${_ARGIVO_DIRECTIVES["check"]}" == "true" ]]; then
+    if ! _argivo::check "$_script"; then
+        exit 1
+    fi
+fi
+
+# Load the script the user wants to run
+# shellcheck source=/dev/null
+source "$_script"
 
 # Temporal variables to save commands, arguments
 # and exclusions before executing the script
