@@ -4,18 +4,22 @@
 
 set -Eeuo pipefail
 
-# Directives for configuring the interpreter
-declare -A  _ARGIVO_DIRECTIVES
+# Prevent loading this module more than once
+[[ -n "${_ARGIVO_PARSER_LOADED:-}" ]] && return 0
+_ARGIVO_PARSER_LOADED=true
+
+# Check if the script have already been loaded
+# shellcheck disable=SC2034
+_ARGIVO_SCRIPT_PARSED=false
 
 # Description of the script, if provided by the user
 _ARGIVO_SCRIPT_DESCRIPTION=""
 
-# Check if annotations have already been loaded
-# shellcheck disable=SC2034
-_ARGIVO_ANNOTATIONS_LOADED=false
+# Directives for configuring the interpreter
+declare -A _ARGIVO_DIRECTIVES
 
 # User-defined functions
-declare -A _ARGIVO_FUNCTIONS
+declare -A _ARGIVO_COMMANDS
 
 # Annotations for user-defined functions
 declare -A _ARGIVO_DESCRIPTIONS
@@ -32,11 +36,10 @@ declare -A _ARGIVO_PARAM_DEFAULTS
 declare -A _ARGIVO_PARAM_OPTIONAL
 declare -A _ARGIVO_PARAM_DESCRIPTIONS
 
-# Load all annotations from the script
-function _argivo::load_annotations() {
-    # Annotations should only need to be parsed once
-    # for each argivo script
-    $_ARGIVO_ANNOTATIONS_LOADED && return
+# Parse the script and populate the internal metadata
+function _argivo::parse_script() {
+    # The script should only need to be parsed once
+    $_ARGIVO_SCRIPT_PARSED && return
 
     local line
 
@@ -73,12 +76,12 @@ function _argivo::load_annotations() {
     # shellcheck disable=SC2154
     while IFS= read -r line; do
         # Empty or blank lines should not be considered
-        [[ "$line" =~ ^[[:space:]]*$ ]] && continue
+        [[ "$line" =~ $_ARGIVO_REGEX_EMPTY ]] && continue
 
         # Waiting for the opening brace of a function declaration
         if [[ "$waiting_for_open_brace" == true ]]; then
             # The first non-blank line must be the opening brace
-            if [[ "$line" =~ ^[[:space:]]*\{([[:space:]]*#.*)?$ ]]; then
+            if [[ "$line" =~ $_ARGIVO_REGEX_OPEN_BRACE ]]; then
                 waiting_for_open_brace=false
                 brace_depth=1
                 continue
@@ -104,7 +107,7 @@ function _argivo::load_annotations() {
 
         # Check for directives in the form of:
         # @argivo key=value
-        if [[ "$line" =~ ^[[:space:]]*#[[:space:]]*@argivo[[:space:]]+([a-zA-Z_][a-zA-Z0-9_-]*)=(.*)$ ]]; then
+        if [[ "$line" =~ $_ARGIVO_REGEX_DIRECTIVE ]]; then
             # Directives can only be used before the first
             # annotation or function declaration
             if [[ "$is_directive_section" == true ]]; then
@@ -119,7 +122,7 @@ function _argivo::load_annotations() {
 
         # Check for hidden comments in the form of:
         # @hidden
-        if [[ "$line" =~ ^[[:space:]]*#[[:space:]]*@hidden[[:space:]]*$ ]]; then
+        if [[ "$line" =~ $_ARGIVO_REGEX_HIDDEN ]]; then
             is_directive_section=false
 
             # Annotations must only be used before the function declaration
@@ -132,7 +135,7 @@ function _argivo::load_annotations() {
 
         # Check for description comments in the form of:
         # @desc This is a description for a function
-        if [[ "$line" =~ ^[[:space:]]*#[[:space:]]*@desc[[:space:]]+(.*)$ ]]; then
+        if [[ "$line" =~ $_ARGIVO_REGEX_DESC ]]; then
             is_directive_section=false
 
             # Annotations must only be used before the function declaration
@@ -145,7 +148,7 @@ function _argivo::load_annotations() {
 
         # Check for parameter comments in the form of:
         # @param name [type=value] [default=value] [optional] Description
-        if [[ "$line" =~ ^[[:space:]]*#[[:space:]]*@param[[:space:]]+([a-zA-Z_][a-zA-Z0-9_]*)([[:space:]]+.*)?$ ]]; then
+        if [[ "$line" =~ $_ARGIVO_REGEX_PARAM ]]; then
             is_directive_section=false
 
             # Annotations must only be used before the function declaration
@@ -200,7 +203,7 @@ function _argivo::load_annotations() {
 
         # Check for examples in the form of:
         # @example This is an example for a function
-        if [[ "$line" =~ ^[[:space:]]*#[[:space:]]*@example[[:space:]]+(.*)$ ]]; then
+        if [[ "$line" =~ $_ARGIVO_REGEX_EXAMPLE ]]; then
             is_directive_section=false
 
             # Annotations must only be used before the function declaration
@@ -213,7 +216,7 @@ function _argivo::load_annotations() {
 
         # Check for alias comments in the form of:
         # @alias alias_name
-        if [[ "$line" =~ ^[[:space:]]*#[[:space:]]*@alias[[:space:]]+([a-zA-Z_][a-zA-Z0-9_]*)[[:space:]]*$ ]]; then
+        if [[ "$line" =~ $_ARGIVO_REGEX_ALIAS ]]; then
             is_directive_section=false
 
             # Annotations must only be used before the function declaration
@@ -226,7 +229,7 @@ function _argivo::load_annotations() {
 
         # Check for exclusion comments in the form of:
         # @excl exclusion_name
-        if [[ "$line" =~ ^[[:space:]]*#[[:space:]]*@excl[[:space:]]+([a-zA-Z_][a-zA-Z0-9_]*([[:space:]]+[a-zA-Z_][a-zA-Z0-9_]*)*)[[:space:]]*$ ]]; then
+        if [[ "$line" =~ $_ARGIVO_REGEX_EXCL ]]; then
             is_directive_section=false
 
             # Annotations must only be used before the function declaration
@@ -240,7 +243,7 @@ function _argivo::load_annotations() {
 
         # Check for requires comments in the form of:
         # @req function_name
-        if [[ "$line" =~ ^[[:space:]]*#[[:space:]]*@req[[:space:]]+([a-zA-Z_][a-zA-Z0-9_]*([[:space:]]+[a-zA-Z_][a-zA-Z0-9_]*)*)[[:space:]]*$ ]]; then
+        if [[ "$line" =~ $_ARGIVO_REGEX_REQ ]]; then
             is_directive_section=false
 
             # Annotations must only be used before the function declaration
@@ -255,12 +258,12 @@ function _argivo::load_annotations() {
         local function_name=""
 
         # Check for function definitions that use the "function" keyword
-        if [[ "$line" =~ ^[[:space:]]*function[[:space:]]+([a-zA-Z_][a-zA-Z0-9_]*)[[:space:]]*(\(\))?([[:space:]]*\{)?[[:space:]]*$ ]]; then
+        if [[ "$line" =~ $_ARGIVO_REGEX_FUNCTION_1 ]]; then
             is_directive_section=false
             function_name="${BASH_REMATCH[1]}"
 
         # Check for function definitions that do not use the "function" keyword
-        elif [[ -z "$function_name" ]] && [[ "$line" =~ ^[[:space:]]*([a-zA-Z_][a-zA-Z0-9_]*)[[:space:]]*\(\)([[:space:]]*\{)?[[:space:]]*$ ]]; then
+        elif [[ -z "$function_name" ]] && [[ "$line" =~ $_ARGIVO_REGEX_FUNCTION_2 ]]; then
             is_directive_section=false
             function_name="${BASH_REMATCH[1]}"
         fi
@@ -280,7 +283,7 @@ function _argivo::load_annotations() {
             fi
 
             # Store the function name for future checks
-            _ARGIVO_FUNCTIONS["$function_name"]=1
+            _ARGIVO_COMMANDS["$function_name"]=1
 
             # Hidden functions
             _ARGIVO_HIDDEN["$function_name"]="$curr_hidden"
@@ -365,7 +368,7 @@ function _argivo::load_annotations() {
 function _argivo::get_commands() {
     local cmd
 
-    for cmd in "${!_ARGIVO_FUNCTIONS[@]}"; do
+    for cmd in "${!_ARGIVO_COMMANDS[@]}"; do
         [[ "$cmd" == "main" ]] && continue
         [[ "$cmd" == _* ]] && continue
         [[ "${_ARGIVO_HIDDEN[$cmd]:-}" == "true" ]] && continue

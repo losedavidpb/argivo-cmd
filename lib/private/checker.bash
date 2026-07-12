@@ -4,6 +4,10 @@
 
 set -Eeuo pipefail
 
+# Prevent loading this module more than once
+[[ -n "${_ARGIVO_CHECKER_LOADED:-}" ]] && return 0
+_ARGIVO_CHECKER_LOADED=true
+
 # Check the syntax of an argivo script
 function _argivo::check() {
     # An argivo script must be provided
@@ -64,13 +68,13 @@ function _argivo::validate_script() {
     fi
 
     # The argivo shebang should be included
-    if ! head -n1 "$script" | grep -qx '#!/usr/bin/env argivo'; then
+    if ! head -n1 "$script" | grep -qx "$_ARGIVO_REGEX_SHEBANG"; then
         echo "error: missing argivo shebang"
         return 1
     fi
 
     # Check for the presence of the main function
-    if ! grep -Eq '^[[:space:]]*(function[[:space:]]+)?main[[:space:]]*(\(\))?' "$script"; then
+    if ! grep -Eq "$_ARGIVO_REGEX_MAIN" "$script"; then
         echo "error: missing main function"
         return 1
     fi
@@ -99,8 +103,8 @@ function _argivo::validate_semantics() {
     local alias=""
 
     # Copy the function table since `unset` is used during validation and
-    # `_ARGIVO_FUNCTIONS` must remain intact for other checks
-    for function in "${!_ARGIVO_FUNCTIONS[@]}"; do
+    # `_ARGIVO_COMMANDS` must remain intact for other checks
+    for function in "${!_ARGIVO_COMMANDS[@]}"; do
         # shellcheck disable=SC2034
         functions["$function"]=1
     done
@@ -109,12 +113,12 @@ function _argivo::validate_semantics() {
 
     while IFS= read -r line; do
         # Empty or blank lines should not be considered
-        [[ "$line" =~ ^[[:space:]]*$ ]] && continue
+        [[ "$line" =~ $_ARGIVO_REGEX_EMPTY ]] && continue
 
         # Waiting for the opening brace of a function declaration
         if [[ "$waiting_for_open_brace" == true ]]; then
             # The first non-blank line must be the opening brace
-            if [[ "$line" =~ ^[[:space:]]*\{([[:space:]]*#.*)?$ ]]; then
+            if [[ "$line" =~ $_ARGIVO_REGEX_OPEN_BRACE ]]; then
                 waiting_for_open_brace=false
                 brace_depth=1
                 continue
@@ -140,12 +144,12 @@ function _argivo::validate_semantics() {
         local function_name=""
 
         # Check for function definitions that use the "function" keyword
-        if [[ "$line" =~ ^[[:space:]]*function[[:space:]]+([a-zA-Z_][a-zA-Z0-9_]*)[[:space:]]*(\(\))?([[:space:]]*\{)?[[:space:]]*$ ]]; then
+        if [[ "$line" =~ $_ARGIVO_REGEX_FUNCTION_1 ]]; then
             is_directive_section=false
             function_name="${BASH_REMATCH[1]}"
 
         # Check for function definitions that do not use the "function" keyword
-        elif [[ -z "$function_name" ]] && [[ "$line" =~ ^[[:space:]]*([a-zA-Z_][a-zA-Z0-9_]*)[[:space:]]*\(\)([[:space:]]*\{)?[[:space:]]*$ ]]; then
+        elif [[ -z "$function_name" ]] && [[ "$line" =~ $_ARGIVO_REGEX_FUNCTION_2 ]]; then
             is_directive_section=false
             function_name="${BASH_REMATCH[1]}"
         fi
@@ -189,7 +193,7 @@ function _argivo::validate_semantics() {
         fi
 
         # Check for annotations and directives in the script
-        if [[ "$line" =~ ^[[:space:]]*#[[:space:]]*@([[:alpha:]_][[:alnum:]_-]*)[[:space:]]*(.*)?$ ]]; then
+        if [[ "$line" =~ $_ARGIVO_REGEX_ANNOTATION ]]; then
             local annotation="${BASH_REMATCH[1]}"
             local value="${BASH_REMATCH[2]}"
 
@@ -208,7 +212,7 @@ function _argivo::validate_semantics() {
                     fi
 
                     # Validate syntax
-                    if ! [[ "$value" =~ ^([a-zA-Z_][a-zA-Z0-9_-]*)=([^[:space:]]+)$ ]]; then
+                    if ! [[ "$value" =~ $_ARGIVO_REGEX_DIRECTIVE_VALUE ]]; then
                         echo "error: invalid @argivo syntax"
                         return 1
                     fi
@@ -219,7 +223,7 @@ function _argivo::validate_semantics() {
                     case "$directive" in
                         check)
                             # Check that the value is boolean
-                            if [[ ! "$directive_value" =~ ^(true|false)$ ]]; then
+                            if [[ ! "$directive_value" =~ $_ARGIVO_REGEX_BOOLEAN ]]; then
                                 echo "error: invalid @argivo check: $directive_value"
                                 return 1
                             fi
@@ -227,7 +231,7 @@ function _argivo::validate_semantics() {
 
                         version)
                             # Check that the version is a valid semantic version
-                            if [[ ! "$directive_value" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+                            if [[ ! "$directive_value" =~ $_ARGIVO_REGEX_VERSION ]]; then
                                 echo "error: invalid @argivo version: $directive_value"
                                 return 1
                             fi
@@ -281,13 +285,13 @@ function _argivo::validate_semantics() {
                     fi
 
                     # Validate syntax
-                    if ! [[ "$value" =~ ^[a-zA-Z_][a-zA-Z0-9_]*([[:space:]]+type=[a-zA-Z_][a-zA-Z0-9_]*([[:space:]]+default=[^[:space:]]+)?)?([[:space:]]+optional)?([[:space:]]+.+)?$ ]]; then
+                    if ! [[ "$value" =~ $_ARGIVO_REGEX_PARAM_SYNTAX ]]; then
                         echo "error: invalid @param syntax"
                         return 1
                     fi
 
                     # Check if type is supported
-                    if [[ "$value" =~ [[:space:]]type=([^[:space:]]+) ]]; then
+                    if [[ "$value" =~ $_ARGIVO_REGEX_PARAM_TYPE ]]; then
                         local type="${BASH_REMATCH[1]}"
                         local validator="argivo::is_$type"
 
@@ -298,7 +302,7 @@ function _argivo::validate_semantics() {
                     fi
 
                     # Check if default is a valid value based on its type
-                    if [[ "$value" =~ [[:space:]]default=([^[:space:]]+) ]]; then
+                    if [[ "$value" =~ $_ARGIVO_REGEX_PARAM_DEFAULT ]]; then
                         local default="${BASH_REMATCH[1]}"
 
                         if [[ -n "${type:-}" ]]; then
@@ -330,7 +334,7 @@ function _argivo::validate_semantics() {
                     fi
 
                     # Alias must be a valid identifier
-                    if ! [[ "$value" =~ ^[a-zA-Z_][a-zA-Z0-9_]*$ ]]; then
+                    if ! [[ "$value" =~ $_ARGIVO_REGEX_IDENTIFIER ]]; then
                         echo "error: invalid @alias syntax"
                         return 1
                     fi
@@ -397,7 +401,7 @@ function _argivo::validate_semantics() {
                     fi
 
                     # Validate syntax
-                    if ! [[ "$value" =~ ^[a-zA-Z_][a-zA-Z0-9_]*([[:space:]]+[a-zA-Z_][a-zA-Z0-9_]*)*$ ]]; then
+                    if ! [[ "$value" =~ $_ARGIVO_REGEX_IDENTIFIER_LIST ]]; then
                         echo "error: invalid @excl syntax"
                         return 1
                     fi
@@ -431,7 +435,7 @@ function _argivo::validate_semantics() {
                     fi
 
                     # Validate syntax
-                    if ! [[ "$value" =~ ^[a-zA-Z_][a-zA-Z0-9_]*([[:space:]]+[a-zA-Z_][a-zA-Z0-9_]*)*$ ]]; then
+                    if ! [[ "$value" =~ $_ARGIVO_REGEX_IDENTIFIER_LIST ]]; then
                         echo "error: invalid @req syntax"
                         return 1
                     fi
@@ -447,7 +451,7 @@ function _argivo::validate_semantics() {
                         fi
 
                         # Required function does not exist
-                        if [[ -z "${_ARGIVO_FUNCTIONS[$required]:-}" ]]; then
+                        if [[ -z "${_ARGIVO_COMMANDS[$required]:-}" ]]; then
                             echo "error: unknown required command: $required"
                             return 1
                         fi

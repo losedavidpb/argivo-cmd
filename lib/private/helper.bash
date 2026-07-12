@@ -4,6 +4,10 @@
 
 set -Eeuo pipefail
 
+# Prevent loading this module more than once
+[[ -n "${_ARGIVO_HELPER_LOADED:-}" ]] && return 0
+_ARGIVO_HELPER_LOADED=true
+
 # Print help information for the user-defined commands
 function _argivo::help_script() {
     local script_name

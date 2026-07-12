@@ -90,10 +90,13 @@ case "$1" in
         fi
 
         # shellcheck source=/dev/null
+        source "$_argivo_private_lib/syntax.bash"
+
+        # shellcheck source=/dev/null
         source "$_argivo_private_lib/parser.bash"
 
-        # Load annotations before checking the script
-        _argivo::load_annotations
+        # Parse script before checking the script
+        _argivo::parse_script
 
         # shellcheck source=/dev/null
         source "$_argivo_private_lib/metadata.bash"
@@ -118,10 +121,13 @@ if [[ ! -f "$_script" || ! -r "$_script" ]]; then
 fi
 
 # shellcheck source=/dev/null
+source "$_argivo_private_lib/syntax.bash"
+
+# shellcheck source=/dev/null
 source "$_argivo_private_lib/parser.bash"
 
-# Load annotations before checking the script
-_argivo::load_annotations
+# Parse script before checking the script
+_argivo::parse_script
 
 # shellcheck source=/dev/null
 source "$_argivo_private_lib/metadata.bash"

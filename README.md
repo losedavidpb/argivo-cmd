@@ -36,7 +36,7 @@ Once the script is executable, it can be used directly as a command:
 
 ```bash
 ./hello.avo
-./hello.avo -hello David
+./hello.avo --hello David
 ./hello.avo --help
 ```
 
