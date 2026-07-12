@@ -359,8 +359,8 @@ function _argivo::parse_script() {
     # Remove trailing newline from script description
     _ARGIVO_SCRIPT_DESCRIPTION="${_ARGIVO_SCRIPT_DESCRIPTION%$'\n'}"
 
-    # Mark annotations as loaded to avoid re-parsing the script
-    _ARGIVO_ANNOTATIONS_LOADED=true
+    # Mark script as parsed to avoid re-parsing the script
+    _ARGIVO_SCRIPT_PARSED=true
 }
 
 # Discover all user-defined commands excluding those that are

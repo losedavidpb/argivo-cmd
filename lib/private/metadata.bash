@@ -108,6 +108,9 @@ function _argivo::load_metadata() {
         echo "error: unterminated multiline value in argivo.conf"
         return 1
     fi
+
+    # Mark metadata as parsed to avoid re-parsing the script
+    _ARGIVO_METADATA_PARSED=true
 }
 
 # Initialize project metadata
