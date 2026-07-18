@@ -32,7 +32,7 @@ _ARGIVO_ABOUT=""
 # Load project metadata from argivo.conf
 function _argivo::load_metadata() {
     # Metadata only needs to be parsed once
-    $_ARGIVO_METADATA_PARSED && return
+    $_ARGIVO_METADATA_PARSED && return 0
 
     local line
 

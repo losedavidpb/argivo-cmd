@@ -42,6 +42,10 @@ Once the script is executable, it can be used directly as a command:
 
 No additional argument parsing, or help generation is required.
 
+## Requirements
+
+Argivo requires Bash 4.2 or later.
+
 ## Installation
 
 ```bash

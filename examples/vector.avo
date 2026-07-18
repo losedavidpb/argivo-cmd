@@ -49,13 +49,17 @@ function vecdiv() {
 # Perform a vector operation
 function _vecop() {
     local op="$1"
+    local parsed_vec
 
     local x1 y1 z1
     local x2 y2 z2
 
     # Read components of each vector
-    read -r x1 y1 z1 <<< "$(_read_vec "$2")"
-    read -r x2 y2 z2 <<< "$(_read_vec "$3")"
+    parsed_vec=$(_read_vec "$2") || return 1
+    read -r x1 y1 z1 <<< "$parsed_vec"
+
+    parsed_vec=$(_read_vec "$3") || return 1
+    read -r x2 y2 z2 <<< "$parsed_vec"
 
     # Division does not admit zero values
     if [ "$op" = "/" ]; then
@@ -77,11 +81,11 @@ function _read_vec() {
 
     local x y z
 
-    x=$(_get_vec "$vec" 0)
-    y=$(_get_vec "$vec" 1)
-    z=$(_get_vec "$vec" 2)
+    x=$(_get_vec "$vec" 0) || return 1
+    y=$(_get_vec "$vec" 1) || return 1
+    z=$(_get_vec "$vec" 2) || return 1
 
-    _check_vec "$x" "$y" "$z"
+    _check_vec "$x" "$y" "$z" || return 1
     printf '%s %s %s\n' "$x" "$y" "$z"
 }
 
@@ -89,13 +93,20 @@ function _read_vec() {
 function _get_vec() {
     local IFS=','
     local v
+    local value
 
     read -ra v <<< "$1"
 
-    [[ -v "v[$2]" ]] ||
+    if [[ ! -v "v[$2]" ]]; then
         argivo::error "invalid vector: '$1'"
+        return 1
+    fi
 
-    printf '%s\n' "${v[$2]}"
+    value="${v[$2]}"
+    value="${value#"${value%%[![:space:]]*}"}"
+    value="${value%"${value##*[![:space:]]}"}"
+
+    printf '%s\n' "$value"
 }
 
 # Check the components of a vector
@@ -105,6 +116,6 @@ function _check_vec() {
     for xyz in "$@"; do
         argivo::assert \
             "invalid vector component: '$xyz'" \
-            argivo::is_number "$xyz"
+            argivo::is_number "$xyz" || return 1
     done
 }

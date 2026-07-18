@@ -14,7 +14,7 @@ function _argivo::check() {
     if (($# == 0)); then
         echo "error: no script provided for checking"
         echo "usage: argivo --check <script>"
-        exit 1
+        return 1
     fi
 
     local script="$1"
@@ -34,12 +34,13 @@ function _argivo::check() {
     # There should not be more arguments
     if (($# != 0)); then
         echo "error: unexpected argument: $1"
-        exit 1
+        return 1
     fi
 
     # Check that the script is a valid argivo script
-    _argivo::validate_script "$script" || exit 1
-    _argivo::validate_semantics "$script" || exit 1
+    _argivo::validate_script "$script" || return 1
+    _argivo::validate_semantics "$script" || return 1
+    _argivo::validate_dependencies || return 1
 
     # Show validation results if verbose is active
     if [[ "$verbose" == "true" ]]; then
@@ -73,6 +74,15 @@ function _argivo::validate_script() {
         return 1
     fi
 
+    # Check the Bash syntax without executing the script
+    local syntax_error
+
+    if ! syntax_error="$("$BASH" -n "$script" 2>&1)"; then
+        echo "error: invalid Bash syntax"
+        printf '%s\n' "$syntax_error"
+        return 1
+    fi
+
     # Check for the presence of the main function
     if ! grep -Eq "$_ARGIVO_REGEX_MAIN" "$script"; then
         echo "error: missing main function"
@@ -97,17 +107,19 @@ function _argivo::validate_semantics() {
     local -A aliases=()
     local -A exclusions=()
     local -A requires=()
+    local -A parameters=()
 
     # Flags to track the state of the annotations
     local hidden=false
     local alias=""
 
-    # Copy the function table since `unset` is used during validation and
-    # `_ARGIVO_COMMANDS` must remain intact for other checks
-    for function in "${!_ARGIVO_COMMANDS[@]}"; do
-        # shellcheck disable=SC2034
-        functions["$function"]=1
-    done
+    # Annotations and directives already declared
+    # for the current function and script
+    local -A annotations=()
+    local -A directives=()
+
+    # Indicates whether annotations are waiting for a function
+    local pending_annotations=false
 
     local line
 
@@ -157,6 +169,7 @@ function _argivo::validate_semantics() {
         # A new function definition has been declared
         if [[ -n "$function_name" ]]; then
             is_directive_section=false
+            pending_annotations=false
 
             # Annotations must not be used inside the function
             is_function_section=true
@@ -177,17 +190,27 @@ function _argivo::validate_semantics() {
                 fi
             fi
 
+            # Built-in command names cannot be redefined
+            if [[ "$function_name" == "help" ]]; then
+                echo "error: reserved command name: $function_name"
+                return 1
+            fi
+
             # Function names must be unique
-            if ! unset "functions[$function_name]"; then
+            if [[ -n "${functions[$function_name]:-}" ]]; then
                 echo "error: duplicate function: $function_name"
                 return 1
             fi
+
+            functions["$function_name"]=1
 
             # Reset flags for the new function
             hidden=false
             alias=""
             exclusions=()
             requires=()
+            parameters=()
+            annotations=()
 
             continue
         fi
@@ -219,6 +242,14 @@ function _argivo::validate_semantics() {
 
                     local directive="${BASH_REMATCH[1]}"
                     local directive_value="${BASH_REMATCH[2]}"
+
+                    # @argivo directive can only be declared once
+                    if [[ -n "${directives[$directive]:-}" ]]; then
+                        echo "error: duplicate @argivo directive: $directive"
+                        return 1
+                    fi
+
+                    directives["$directive"]=1
 
                     case "$directive" in
                         check)
@@ -255,6 +286,7 @@ function _argivo::validate_semantics() {
 
                 desc)
                     is_directive_section=false
+                    pending_annotations=true
 
                     # Annotations must be declared outside functions
                     if [[ "$is_function_section" == true ]]; then
@@ -267,10 +299,19 @@ function _argivo::validate_semantics() {
                         echo "error: @desc annotation requires a value"
                         return 1
                     fi
+
+                    # @desc cannot be used twice at the same function
+                    if [[ -n "${annotations[$annotation]:-}" ]]; then
+                        echo "error: duplicate @$annotation annotation"
+                        return 1
+                    fi
+
+                    annotations["$annotation"]=1
                 ;;
 
                 param)
                     is_directive_section=false
+                    pending_annotations=true
 
                     # Annotations must be declared outside functions
                     if [[ "$is_function_section" == true ]]; then
@@ -289,6 +330,18 @@ function _argivo::validate_semantics() {
                         echo "error: invalid @param syntax"
                         return 1
                     fi
+
+                    # Get the parameter name from the annotation
+                    local parameter
+                    read -r parameter _ <<< "$value"
+
+                    # Parameter names must be unique within the same function
+                    if [[ -n "${parameters[$parameter]:-}" ]]; then
+                        echo "error: duplicate parameter: $parameter"
+                        return 1
+                    fi
+
+                    parameters["$parameter"]=1
 
                     # Check if type is supported
                     if [[ "$value" =~ $_ARGIVO_REGEX_PARAM_TYPE ]]; then
@@ -309,8 +362,6 @@ function _argivo::validate_semantics() {
                             local validator="argivo::is_$type"
 
                             if ! "$validator" "$default"; then
-                                local parameter="${value%% *}"
-
                                 echo "error: invalid default value '$default' for parameter '$parameter'"
                                 return 1
                             fi
@@ -320,6 +371,7 @@ function _argivo::validate_semantics() {
 
                 alias)
                     is_directive_section=false
+                    pending_annotations=true
 
                     # Annotations must be declared outside functions
                     if [[ "$is_function_section" == true ]]; then
@@ -339,6 +391,26 @@ function _argivo::validate_semantics() {
                         return 1
                     fi
 
+                    # Reversed command aliases like "-h" cannot be used
+                    if [[ "$value" == "h" ]]; then
+                        echo "error: reserved command alias: $value"
+                        return 1
+                    fi
+
+                    # Alias must not collide with a command name
+                    if [[ -n "${_ARGIVO_COMMANDS[$value]:-}" ]]; then
+                        echo "error: alias conflicts with command name: $value"
+                        return 1
+                    fi
+
+                    # @alias cannot be used twice at the same function
+                    if [[ -n "${annotations[$annotation]:-}" ]]; then
+                        echo "error: duplicate @$annotation annotation"
+                        return 1
+                    fi
+
+                    annotations["$annotation"]=1
+
                     # Alias must be unique
                     if [[ -n "${aliases[$value]:-}" ]]; then
                         echo "error: duplicate alias: $value"
@@ -351,6 +423,7 @@ function _argivo::validate_semantics() {
 
                 hidden)
                     is_directive_section=false
+                    pending_annotations=true
 
                     # Annotations must be declared outside functions
                     if [[ "$is_function_section" == true ]]; then
@@ -364,6 +437,14 @@ function _argivo::validate_semantics() {
                         return 1
                     fi
 
+                    # @hidden cannot be used twice at the same function
+                    if [[ -n "${annotations[$annotation]:-}" ]]; then
+                        echo "error: duplicate @$annotation annotation"
+                        return 1
+                    fi
+
+                    annotations["$annotation"]=1
+
                     # Used to check that the main function
                     # does not use @hidden
                     hidden=true
@@ -371,6 +452,7 @@ function _argivo::validate_semantics() {
 
                 example)
                     is_directive_section=false
+                    pending_annotations=true
 
                     # Annotations must be declared outside functions
                     if [[ "$is_function_section" == true ]]; then
@@ -387,6 +469,7 @@ function _argivo::validate_semantics() {
 
                 excl)
                     is_directive_section=false
+                    pending_annotations=true
 
                     # Annotations must be declared outside functions
                     if [[ "$is_function_section" == true ]]; then
@@ -406,6 +489,14 @@ function _argivo::validate_semantics() {
                         return 1
                     fi
 
+                    # @excl cannot be used twice at the same function
+                    if [[ -n "${annotations[$annotation]:-}" ]]; then
+                        echo "error: duplicate @$annotation annotation"
+                        return 1
+                    fi
+
+                    annotations["$annotation"]=1
+
                     local group
 
                     # Check for duplicate exclusion groups within the same function
@@ -421,6 +512,7 @@ function _argivo::validate_semantics() {
 
                 req)
                     is_directive_section=false
+                    pending_annotations=true
 
                     # Annotations must be declared outside functions
                     if [[ "$is_function_section" == true ]]; then
@@ -439,6 +531,14 @@ function _argivo::validate_semantics() {
                         echo "error: invalid @req syntax"
                         return 1
                     fi
+
+                    # @req cannot be used twice at the same function
+                    if [[ -n "${annotations[$annotation]:-}" ]]; then
+                        echo "error: duplicate @$annotation annotation"
+                        return 1
+                    fi
+
+                    annotations["$annotation"]=1
 
                     local required
 
@@ -466,9 +566,86 @@ function _argivo::validate_semantics() {
                     return 1
                 ;;
             esac
-
         fi
     done < "$script"
+
+    # There must not be any annotations without an associated function
+    if $pending_annotations; then
+        echo "error: annotations are not associated with a function"
+        return 1
+    fi
+
+    # A function declaration cannot be left without an opening brace
+    if $waiting_for_open_brace; then
+        echo "error: expected opening brace after function declaration"
+        return 1
+    fi
+
+    return 0
+}
+
+# Check that command dependencies do not contain cycles
+function _argivo::validate_dependencies() {
+    local -A dependency_count=()
+    local -A dependent_commands=()
+    local -a ready_commands=()
+
+    local command
+    local required
+    local dependent
+
+    # Initialize the number of requirements for every command
+    for command in "${!_ARGIVO_COMMANDS[@]}"; do
+        dependency_count["$command"]=0
+    done
+
+    # Count requirements and build the reverse dependency graph
+    for command in "${!_ARGIVO_REQUIRES[@]}"; do
+        for required in ${_ARGIVO_REQUIRES[$command]}; do
+            dependency_count["$command"]=$((
+                ${dependency_count[$command]} + 1
+            ))
+
+            if [[ -n "${dependent_commands[$required]:-}" ]]; then
+                dependent_commands["$required"]+=" $command"
+            else
+                dependent_commands["$required"]="$command"
+            fi
+        done
+    done
+
+    # Commands without requirements are ready to be processed
+    for command in "${!_ARGIVO_COMMANDS[@]}"; do
+        if [[ "${dependency_count[$command]}" == "0" ]]; then
+            ready_commands+=("$command")
+        fi
+    done
+
+    local queue_index=0
+    local processed_commands=0
+
+    # Process commands in dependency order and release their dependents
+    while ((queue_index < ${#ready_commands[@]})); do
+        command="${ready_commands[$queue_index]}"
+        queue_index=$((queue_index + 1))
+        processed_commands=$((processed_commands + 1))
+
+        for dependent in ${dependent_commands[$command]:-}; do
+            dependency_count["$dependent"]=$((
+                ${dependency_count[$dependent]} - 1
+            ))
+
+            if [[ "${dependency_count[$dependent]}" == "0" ]]; then
+                ready_commands+=("$dependent")
+            fi
+        done
+    done
+
+    # Unprocessed commands indicate at least one dependency cycle
+    if ((processed_commands != ${#_ARGIVO_COMMANDS[@]})); then
+        echo "error: circular command dependency detected"
+        return 1
+    fi
 
     return 0
 }

@@ -11,6 +11,18 @@ _ARGIVO_HELPER_LOADED=true
 # Print help information for the user-defined commands
 function _argivo::help_script() {
     local script_name
+    local command
+    local group
+    local function_name
+    local function_group
+    local required
+
+    local command_list
+    local exclusion_list
+    local requirement_list
+
+    local -a grouped_commands=()
+    local -a requirements=()
 
     # Script was already defined in argivo, so
     # it is safe to use it here without checking for existence
@@ -31,10 +43,9 @@ function _argivo::help_script() {
     _argivo::print_help "$script_name" "main"
 
     # Available commands
-    local commands
-    commands="$(_argivo::get_commands)"
+    command_list="$(_argivo::get_commands)"
 
-    if [[ -n "$commands" ]]; then
+    if [[ -n "$command_list" ]]; then
         echo
         echo "Available commands:"
 
@@ -42,38 +53,36 @@ function _argivo::help_script() {
             printf "  %-20s %s\n" \
                 "$(_argivo::usage "$command")" \
                 "${_ARGIVO_DESCRIPTIONS[$command]:-No description}"
-        done <<< "$commands"
+        done <<< "$command_list"
     fi
 
     # Mutually exclusive commands
-    local exclusions
-    exclusions="$(_argivo::get_exclusions)"
+    exclusion_list="$(_argivo::get_exclusions)"
 
-    if [[ -n "$exclusions" ]]; then
+    if [[ -n "$exclusion_list" ]]; then
         echo
         echo "Mutually exclusive commands:"
 
         while read -r group; do
-            commands=()
+            grouped_commands=()
 
             # Prepares commands for current group
             for function_name in "${!_ARGIVO_EXCLUSIONS[@]}"; do
                 for function_group in ${_ARGIVO_EXCLUSIONS[$function_name]}; do
                     if [[ "$function_group" == "$group" ]]; then
-                        commands+=("--$function_name")
+                        grouped_commands+=("--$function_name")
                     fi
                 done
             done
 
-            printf "  %-20s %s\n" "@$group" "${commands[*]}"
-        done <<< "$exclusions"
+            printf "  %-20s %s\n" "@$group" "${grouped_commands[*]}"
+        done <<< "$exclusion_list"
     fi
 
     # Required commands
-    local requires
-    requires="$(_argivo::get_requires)"
+    requirement_list="$(_argivo::get_requires)"
 
-    if [[ -n "$requires" ]]; then
+    if [[ -n "$requirement_list" ]]; then
         echo
         echo "Required commands:"
 
@@ -81,16 +90,12 @@ function _argivo::help_script() {
             requirements=()
 
             # Prepares required commands for current function
-            for function_name in "${!_ARGIVO_REQUIRES[@]}"; do
-                if [[ "$function_name" == "$command" ]]; then
-                    for required in ${_ARGIVO_REQUIRES[$function_name]}; do
-                        requirements+=("--$required")
-                    done
-                fi
+            for required in ${_ARGIVO_REQUIRES[$command]}; do
+                requirements+=("--$required")
             done
 
             printf "  %-20s %s\n" "--$command" "${requirements[*]}"
-        done <<< "$requires"
+        done <<< "$requirement_list"
     fi
 }
 
@@ -105,7 +110,7 @@ function _argivo::help_cmd() {
     fi
 
     # Check that the command exists
-    if [[ -z "${_ARGIVO_DESCRIPTIONS[$command]:-}" && "$command" != "main" ]]; then
+    if [[ -z "${_ARGIVO_COMMANDS[$command]:-}" ]]; then
         echo "error: unknown command: $command"
         return 1
     fi
@@ -113,13 +118,13 @@ function _argivo::help_cmd() {
     # Hidden commands cannot be executed directly
     if [[ "${_ARGIVO_HIDDEN[$command]:-false}" == "true" ]]; then
         echo "error: unknown command: $command"
-        exit 1
+        return 1
     fi
 
     # Private commands cannot be executed directly
     if [[ "$command" == _* || "$command" == argivo::* ]]; then
         echo "error: unknown command: $command"
-        exit 1
+        return 1
     fi
 
     # Usage message
@@ -131,7 +136,7 @@ function _argivo::help_cmd() {
 
     # Description for a specific command
     else
-        echo "${_ARGIVO_DESCRIPTIONS[$command]}"
+        echo "${_ARGIVO_DESCRIPTIONS[$command]:-No description}"
     fi
 
     _argivo::print_help "$script_name" "$command"
@@ -141,6 +146,8 @@ function _argivo::help_cmd() {
 function _argivo::print_help() {
     local script_name="$1"
     local command="$2"
+    local example
+    local function_group
 
     # Show parameters and their properties
     if [[ -n "${_ARGIVO_PARAMS[$command]:-}" ]]; then

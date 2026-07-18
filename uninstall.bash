@@ -4,17 +4,17 @@
 
 set -Eeuo pipefail
 
-# Directories for desinstallation
+# Installation paths to remove
 _argivo_bin="/usr/local/bin/argivo"
 _argivo_lib="/usr/local/lib/argivo"
 
-# Use sudo if not running as root
-if [[ $EUID -ne 0 ]]; then
-    sudo rm -f "$_argivo_bin"
-    sudo rm -rf "$_argivo_lib"
-else
-    rm -f "$_argivo_bin"
-    rm -rf "$_argivo_lib"
-fi
+# Run an uninstallation command with sudo when required
+function _argivo::uninstall_command() {
+    if ((EUID)); then sudo "$@"; else "$@"; fi
+}
+
+# Remove the executable and library directory
+_argivo::uninstall_command rm -f -- "$_argivo_bin"
+_argivo::uninstall_command rm -rf -- "$_argivo_lib"
 
 echo "argivo uninstalled successfully"

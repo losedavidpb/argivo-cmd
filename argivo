@@ -105,7 +105,7 @@ case "$1" in
         source "$_argivo_private_lib/checker.bash"
 
         # Check that the script is a valid argivo script
-        _argivo::check "$_script" --verbose
+        _argivo::check "$_script" --verbose || exit 1
         exit 0
     ;;
 esac
@@ -117,7 +117,7 @@ shift
 # The script must exist and be readable
 if [[ ! -f "$_script" || ! -r "$_script" ]]; then
     echo "error: script not found or is not readable"
-    return 1
+    exit 1
 fi
 
 # shellcheck source=/dev/null
@@ -135,12 +135,9 @@ source "$_argivo_private_lib/metadata.bash"
 # shellcheck source=/dev/null
 source "$_argivo_private_lib/checker.bash"
 
-# Run the check when the @argivo check directive is missing,
-# set to "true", or has any value other than "false"
-if [[ ! -v _ARGIVO_DIRECTIVES["check"] || "${_ARGIVO_DIRECTIVES["check"]}" == "true" ]]; then
-    if ! _argivo::check "$_script"; then
-        exit 1
-    fi
+# Run the checker unless the @argivo check directive is explicitly set to "false"
+if [[ "${_ARGIVO_DIRECTIVES["check"]:-true}" != "false" ]]; then
+    _argivo::check "$_script" || exit 1
 fi
 
 # Load the script the user wants to run
@@ -198,7 +195,7 @@ while (($# > 0)); do
                 # shellcheck source=/dev/null
                 source "$_argivo_private_lib/helper.bash"
 
-                _argivo::help_script "$@"
+                _argivo::help_script "$@" || exit 1
                 exit 0
             fi
 
@@ -212,7 +209,7 @@ while (($# > 0)); do
                 # shellcheck source=/dev/null
                 source "$_argivo_private_lib/helper.bash"
 
-                _argivo::help_script "$@"
+                _argivo::help_script "$@" || exit 1
                 exit 0
             fi
 

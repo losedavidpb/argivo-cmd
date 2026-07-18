@@ -23,26 +23,34 @@ _argivo_target="$_argivo_bin_dir/argivo"
     exit 1
 }
 
-# Use sudo if not running as root
-if [[ $EUID -ne 0 ]]; then
-    sudo mkdir -p "$_argivo_lib_dir"
-    sudo mkdir -p "$_argivo_lib_dir/private"
-    sudo mkdir -p "$_argivo_lib_dir/public"
+# Run an installation command with sudo when required
+function _argivo::install_command() {
+    if ((EUID)); then sudo "$@"; else "$@"; fi
+}
 
-    sudo install -m 755 "$_argivo_source" "$_argivo_target"
-    sudo install -m 644 "$_script_dir"/lib/private/*.bash "$_argivo_lib_dir/private/"
-    sudo install -m 644 "$_script_dir"/lib/public/*.bash "$_argivo_lib_dir/public/"
-    sudo install -m 644 "$_script_dir/argivo.conf" "$_argivo_lib_dir/argivo.conf"
-else
-    mkdir -p "$_argivo_lib_dir"
-    mkdir -p "$_argivo_lib_dir/private"
-    mkdir -p "$_argivo_lib_dir/public"
+# Prepare the installation directories
+_argivo::install_command mkdir -p "$_argivo_lib_dir"
+_argivo::install_command mkdir -p "$_argivo_lib_dir/private"
+_argivo::install_command mkdir -p "$_argivo_lib_dir/public"
 
-    install -m 755 "$_argivo_source" "$_argivo_target"
-    install -m 644 "$_script_dir"/lib/private/*.bash "$_argivo_lib_dir/private/"
-    install -m 644 "$_script_dir"/lib/public/*.bash "$_argivo_lib_dir/public/"
-    install -m 644 "$_script_dir/argivo.conf" "$_argivo_lib_dir/argivo.conf"
-fi
+# Install the executable, libraries, and configuration file
+_argivo::install_command install -m 755 "$_argivo_source" "$_argivo_target"
+_argivo::install_command install -m 644 "$_script_dir"/lib/private/*.bash "$_argivo_lib_dir/private/"
+_argivo::install_command install -m 644 "$_script_dir"/lib/public/*.bash "$_argivo_lib_dir/public/"
+_argivo::install_command install -m 644 "$_script_dir/argivo.conf" "$_argivo_lib_dir/argivo.conf"
+
+# Remove installed modules that no longer exist in the current source tree
+for _library_type in private public; do
+    for _installed_lib in "$_argivo_lib_dir/$_library_type"/*.bash; do
+        [[ -e "$_installed_lib" ]] || continue
+
+        _lib_name="${_installed_lib##*/}"
+
+        if [[ ! -f "$_script_dir/lib/$_library_type/$_lib_name" ]]; then
+            _argivo::install_command rm -f -- "$_installed_lib"
+        fi
+    done
+done
 
 echo "argivo installed successfully"
 echo "  binary: $_argivo_target"

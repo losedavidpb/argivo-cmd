@@ -39,7 +39,7 @@ declare -A _ARGIVO_PARAM_DESCRIPTIONS
 # Parse the script and populate the internal metadata
 function _argivo::parse_script() {
     # The script should only need to be parsed once
-    $_ARGIVO_SCRIPT_PARSED && return
+    $_ARGIVO_SCRIPT_PARSED && return 0
 
     local line
 

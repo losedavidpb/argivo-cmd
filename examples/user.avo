@@ -15,7 +15,7 @@ function create_user() {
     local age="$2"
     local admin="${3:-}"
 
-    _validate_username "$username"
+    validate_username "$username" || return 1
     _save_user "$username"
 
     echo "User '$1' created"
@@ -25,17 +25,19 @@ function create_user() {
     if [[ -n "$admin" ]]; then
         echo "Admin: $admin"
     else
-        echo "Admin: not specified"
+        echo "Admin: false"
     fi
 }
 
 # @hidden
 # @desc Validate username
 function validate_username() {
-    [[ -z "$1" ]] && {
+    if [[ -z "$1" ]]; then
         echo "invalid username"
         return 1
-    }
+    fi
+
+    return 0
 }
 
 # @desc Save user in database
