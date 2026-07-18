@@ -11,16 +11,24 @@ _ARGIVO_HELPER_LOADED=true
 # Print help information for the user-defined commands
 function _argivo::help_script() {
     local script_name
+
+    # Iteration variables used to build command groups
     local command
     local group
+
     local function_name
     local function_group
+
+    # Required command in the current dependency list
     local required
 
+    # Generated lists displayed in each help section
     local command_list
     local exclusion_list
     local requirement_list
 
+    # Commands collected for the current
+    # exclusion or requirement entry
     local -a grouped_commands=()
     local -a requirements=()
 
@@ -32,7 +40,7 @@ function _argivo::help_script() {
     # If a specific command is provided, show help for that command
     if [[ -n "${1:-}" ]]; then
         _argivo::help_cmd "$script_name" "$1"
-        return
+        return 0
     fi
 
     # Usage message
@@ -45,14 +53,21 @@ function _argivo::help_script() {
     # Available commands
     command_list="$(_argivo::get_commands)"
 
+    # Show the available commands of the script
     if [[ -n "$command_list" ]]; then
         echo
         echo "Available commands:"
 
+        # Include each command with its usage and description
         while read -r command; do
-            printf "  %-20s %s\n" \
-                "$(_argivo::usage "$command")" \
-                "${_ARGIVO_DESCRIPTIONS[$command]:-No description}"
+            local usage
+            local description
+
+            # Prepare the usage and description message
+            usage="$(_argivo::usage "$command")"
+            description="${_ARGIVO_DESCRIPTIONS[$command]:-No description}"
+
+            printf "  %-20s %s\n" "$usage" "$description"
         done <<< "$command_list"
     fi
 
@@ -146,6 +161,7 @@ function _argivo::help_cmd() {
 function _argivo::print_help() {
     local script_name="$1"
     local command="$2"
+
     local example
     local function_group
 
@@ -163,6 +179,7 @@ function _argivo::print_help() {
 
         local param
 
+        # Include each parameter and its metadata
         for param in ${_ARGIVO_PARAMS[$command]}; do
             local key="$command:$param"
             local meta=""
@@ -181,11 +198,14 @@ function _argivo::print_help() {
                 meta="${meta:+$meta, }optional"
             fi
 
+            # Parameter with additional metadata
             if [[ -n "$meta" ]]; then
                 printf "  %-12s %-*s [%s]\n" \
                     "$param" "$max_descr" \
                     "${_ARGIVO_PARAM_DESCRIPTIONS[$key]:-}" \
                     "$meta"
+
+            # Paramater without additional metadata
             else
                 printf "  %-12s %s\n" \
                     "$param" \
@@ -227,6 +247,7 @@ function _argivo::print_help() {
 
         local exclusion
 
+        # Include all the commands of the @excl annotation
         for exclusion in ${_ARGIVO_EXCLUSIONS[$command]}; do
             local commands=()
             local function_name
@@ -253,6 +274,7 @@ function _argivo::print_help() {
         local commands=()
         local required
 
+        # Include all the commands of the @req annotation
         for required in ${_ARGIVO_REQUIRES[$command]}; do
             commands+=("--$required")
         done
@@ -292,6 +314,7 @@ function _argivo::max_param_description_length() {
     local max_descr=0
     local param
 
+    # Update the length based on the longest descripcion
     for param in ${_ARGIVO_PARAMS[$command]:-}; do
         local descr="${_ARGIVO_PARAM_DESCRIPTIONS["$command:$param"]:-}"
         ((${#descr} > max_descr)) && max_descr=${#descr}

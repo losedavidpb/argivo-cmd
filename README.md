@@ -44,7 +44,7 @@ No additional argument parsing, or help generation is required.
 
 ## Requirements
 
-Argivo requires Bash 4.2 or later.
+Argivo requires Bash 4.3 or later.
 
 ## Installation
 

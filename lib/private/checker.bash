@@ -38,9 +38,9 @@ function _argivo::check() {
     fi
 
     # Check that the script is a valid argivo script
-    _argivo::validate_script "$script" || return 1
-    _argivo::validate_semantics "$script" || return 1
-    _argivo::validate_dependencies || return 1
+    _argivo::validate_script_structure "$script" || return 1
+    _argivo::validate_script_semantics "$script" || return 1
+    _argivo::validate_command_dependencies || return 1
 
     # Show validation results if verbose is active
     if [[ "$verbose" == "true" ]]; then
@@ -59,7 +59,7 @@ function _argivo::check() {
 }
 
 # Perform basic checks of an Argivo script
-function _argivo::validate_script() {
+function _argivo::validate_script_structure() {
     local script="$1"
 
     # The script must exist and be readable
@@ -74,9 +74,9 @@ function _argivo::validate_script() {
         return 1
     fi
 
-    # Check the Bash syntax without executing the script
     local syntax_error
 
+    # Check the Bash syntax without executing the script
     if ! syntax_error="$("$BASH" -n "$script" 2>&1)"; then
         echo "error: invalid Bash syntax"
         printf '%s\n' "$syntax_error"
@@ -93,8 +93,14 @@ function _argivo::validate_script() {
 }
 
 # Perform semantic validation of an Argivo script
-function _argivo::validate_semantics() {
+# shellcheck disable=SC2034
+function _argivo::validate_script_semantics() {
     local script="$1"
+
+    # Annotations and directives already declared
+    # for the current function and script
+    local -A annotations=()
+    local -A directives=()
 
     # Flags to control the code sections
     local is_directive_section=true
@@ -110,16 +116,9 @@ function _argivo::validate_semantics() {
     local -A parameters=()
 
     # Flags to track the state of the annotations
+    local pending_annotations=false
     local hidden=false
     local alias=""
-
-    # Annotations and directives already declared
-    # for the current function and script
-    local -A annotations=()
-    local -A directives=()
-
-    # Indicates whether annotations are waiting for a function
-    local pending_annotations=false
 
     local line
 
@@ -129,87 +128,44 @@ function _argivo::validate_semantics() {
 
         # Waiting for the opening brace of a function declaration
         if [[ "$waiting_for_open_brace" == true ]]; then
-            # The first non-blank line must be the opening brace
-            if [[ "$line" =~ $_ARGIVO_REGEX_OPEN_BRACE ]]; then
-                waiting_for_open_brace=false
-                brace_depth=1
-                continue
-            fi
+            _argivo::consume_open_brace "$line" waiting_for_open_brace brace_depth && continue
 
             echo "error: expected opening brace after function declaration"
             return 1
         fi
 
-        # Update function brace depth to only load annotations
-        # that appear before a function declaration and ignore
-        # annotations inside function bodies
-        if [[ "$is_function_section" == true ]]; then
-            _argivo::update_brace_depth "$line"
+        # Update brace depth and detect when the current function body ends
+        _argivo::update_function_section "$line" is_function_section brace_depth
 
-            # The function body has ended once the
-            # brace depth reaches zero
-            if (( brace_depth == 0 )); then
-                is_function_section=false
-            fi
-        fi
-
-        local function_name=""
-
-        # Check for function definitions that use the "function" keyword
-        if [[ "$line" =~ $_ARGIVO_REGEX_FUNCTION_1 ]]; then
-            is_directive_section=false
-            function_name="${BASH_REMATCH[1]}"
-
-        # Check for function definitions that do not use the "function" keyword
-        elif [[ -z "$function_name" ]] && [[ "$line" =~ $_ARGIVO_REGEX_FUNCTION_2 ]]; then
-            is_directive_section=false
-            function_name="${BASH_REMATCH[1]}"
-        fi
+        # shellcheck disable=SC2155
+        local function_name="$(_argivo::get_function_name "$line")"
 
         # A new function definition has been declared
         if [[ -n "$function_name" ]]; then
             is_directive_section=false
             pending_annotations=false
 
-            # Annotations must not be used inside the function
-            is_function_section=true
-            brace_depth=0
+            # Initialize function body tracking
+            _argivo::start_function_section "$line" is_function_section waiting_for_open_brace brace_depth
 
-            # The opening brace may appear on the next non-blank line
-            if [[ "$line" == *"{"* ]]; then
-                brace_depth=1
-            else
-                waiting_for_open_brace=true
-            fi
+            # Validate function
+            _argivo::validate_main_function_annotations "$function_name" requires exclusions "$hidden" "$alias" || return 1
+            _argivo::validate_name_not_reserved "$function_name" help || return 1
+            _argivo::register_unique_value functions "$function_name" || return 1
 
-            # The main function cannot have certain annotations
-            if [[ "$function_name" == "main" ]]; then
-                if [[ -n "${requires[*]}" || -n "${exclusions[*]}" || "$hidden" == true || -n "$alias" ]]; then
-                    echo "error: main function cannot use @alias, @req, @excl or @hidden"
-                    return 1
-                fi
-            fi
-
-            # Built-in command names cannot be redefined
-            if [[ "$function_name" == "help" ]]; then
-                echo "error: reserved command name: $function_name"
-                return 1
-            fi
-
-            # Function names must be unique
-            if [[ -n "${functions[$function_name]:-}" ]]; then
-                echo "error: duplicate function: $function_name"
-                return 1
-            fi
-
-            functions["$function_name"]=1
-
-            # Reset flags for the new function
+            # Reset single-value annotations
+            # for the next function
             hidden=false
             alias=""
+
+            # Reset annotation value registries
+            # for the next function
             exclusions=()
             requires=()
             parameters=()
+
+            # Reset the annotation declaration
+            # registry for the next function
             annotations=()
 
             continue
@@ -220,344 +176,88 @@ function _argivo::validate_semantics() {
             local annotation="${BASH_REMATCH[1]}"
             local value="${BASH_REMATCH[2]}"
 
+            # Annotations end the directive section and wait for a function
+            if [[ "$annotation" != "argivo" ]]; then
+                is_directive_section=false
+                pending_annotations=true
+            fi
+
             case $annotation in
                 argivo)
-                    # Directives can only be defined before any function
-                    if [[ "$is_directive_section" == false ]]; then
-                        echo "error: @argivo directives must be declared before the first function"
-                        return 1
-                    fi
+                    local directive="${value%%=*}"
+                    local directive_value="${value#*=}"
 
-                    # @argivo requires a value
-                    if [[ -z "$value" ]]; then
-                        echo "error: @argivo annotation requires a value"
-                        return 1
-                    fi
-
-                    # Validate syntax
-                    if ! [[ "$value" =~ $_ARGIVO_REGEX_DIRECTIVE_VALUE ]]; then
-                        echo "error: invalid @argivo syntax"
-                        return 1
-                    fi
-
-                    local directive="${BASH_REMATCH[1]}"
-                    local directive_value="${BASH_REMATCH[2]}"
-
-                    # @argivo directive can only be declared once
-                    if [[ -n "${directives[$directive]:-}" ]]; then
-                        echo "error: duplicate @argivo directive: $directive"
-                        return 1
-                    fi
-
-                    directives["$directive"]=1
-
-                    case "$directive" in
-                        check)
-                            # Check that the value is boolean
-                            if [[ ! "$directive_value" =~ $_ARGIVO_REGEX_BOOLEAN ]]; then
-                                echo "error: invalid @argivo check: $directive_value"
-                                return 1
-                            fi
-                        ;;
-
-                        version)
-                            # Check that the version is a valid semantic version
-                            if [[ ! "$directive_value" =~ $_ARGIVO_REGEX_VERSION ]]; then
-                                echo "error: invalid @argivo version: $directive_value"
-                                return 1
-                            fi
-
-                            local required_major="${directive_value%%.*}"
-                            local current_major="${_ARGIVO_VERSION%%.*}"
-
-                            # Check that the major version matches
-                            if [[ "$required_major" != "$current_major" ]]; then
-                                echo "error: this script requires Argivo $required_major.x.x (current: $_ARGIVO_VERSION)"
-                                return 1
-                            fi
-                        ;;
-
-                        *)
-                            echo "error: unsupported @argivo directive: $directive"
-                            return 1
-                        ;;
-                    esac
+                    # Check @argivo requirements
+                    _argivo::validate_declaration_section "$annotation" "$is_directive_section" true || return 1
+                    _argivo::validate_required_value "$annotation" "$value" || return 1
+                    _argivo::validate_value_syntax "$annotation" "$value" "$_ARGIVO_REGEX_DIRECTIVE_VALUE" || return 1
+                    _argivo::register_unique_value directives "$directive" || return 1
+                    _argivo::validate_directive_value "$annotation" "$directive" "$directive_value" || return 1
                 ;;
 
                 desc)
-                    is_directive_section=false
-                    pending_annotations=true
-
-                    # Annotations must be declared outside functions
-                    if [[ "$is_function_section" == true ]]; then
-                        echo "error: @desc cannot appear inside a function"
-                        return 1
-                    fi
-
-                    # @desc requires a value
-                    if [[ -z "$value" ]]; then
-                        echo "error: @desc annotation requires a value"
-                        return 1
-                    fi
-
-                    # @desc cannot be used twice at the same function
-                    if [[ -n "${annotations[$annotation]:-}" ]]; then
-                        echo "error: duplicate @$annotation annotation"
-                        return 1
-                    fi
-
-                    annotations["$annotation"]=1
+                    # Check @desc requirements
+                    _argivo::validate_declaration_section "$annotation" "$is_function_section" false || return 1
+                    _argivo::validate_required_value "$annotation" "$value" || return 1
+                    _argivo::register_unique_value annotations "$annotation" || return 1
                 ;;
 
                 param)
-                    is_directive_section=false
-                    pending_annotations=true
+                    local parameter="${value%%[[:space:]]*}"
 
-                    # Annotations must be declared outside functions
-                    if [[ "$is_function_section" == true ]]; then
-                        echo "error: @param cannot appear inside a function"
-                        return 1
-                    fi
-
-                    # @param requires a value
-                    if [[ -z "$value" ]]; then
-                        echo "error: @param annotation requires a value"
-                        return 1
-                    fi
-
-                    # Validate syntax
-                    if ! [[ "$value" =~ $_ARGIVO_REGEX_PARAM_SYNTAX ]]; then
-                        echo "error: invalid @param syntax"
-                        return 1
-                    fi
-
-                    # Get the parameter name from the annotation
-                    local parameter
-                    read -r parameter _ <<< "$value"
-
-                    # Parameter names must be unique within the same function
-                    if [[ -n "${parameters[$parameter]:-}" ]]; then
-                        echo "error: duplicate parameter: $parameter"
-                        return 1
-                    fi
-
-                    parameters["$parameter"]=1
-
-                    # Check if type is supported
-                    if [[ "$value" =~ $_ARGIVO_REGEX_PARAM_TYPE ]]; then
-                        local type="${BASH_REMATCH[1]}"
-                        local validator="argivo::is_$type"
-
-                        if ! declare -F "$validator" >/dev/null; then
-                            echo "error: unknown parameter type: $type"
-                            return 1
-                        fi
-                    fi
-
-                    # Check if default is a valid value based on its type
-                    if [[ "$value" =~ $_ARGIVO_REGEX_PARAM_DEFAULT ]]; then
-                        local default="${BASH_REMATCH[1]}"
-
-                        if [[ -n "${type:-}" ]]; then
-                            local validator="argivo::is_$type"
-
-                            if ! "$validator" "$default"; then
-                                echo "error: invalid default value '$default' for parameter '$parameter'"
-                                return 1
-                            fi
-                        fi
-                    fi
+                    # Check @param requirements
+                    _argivo::validate_declaration_section "$annotation" "$is_function_section" false || return 1
+                    _argivo::validate_required_value "$annotation" "$value" || return 1
+                    _argivo::validate_value_syntax "$annotation" "$value" "$_ARGIVO_REGEX_PARAM_SYNTAX" || return 1
+                    _argivo::register_unique_value parameters "$parameter" || return 1
+                    _argivo::validate_parameter_type "$value" || return 1
+                    _argivo::validate_parameter_default "$value" "$parameter" || return 1
                 ;;
 
                 alias)
-                    is_directive_section=false
-                    pending_annotations=true
-
-                    # Annotations must be declared outside functions
-                    if [[ "$is_function_section" == true ]]; then
-                        echo "error: @alias cannot appear inside a function"
-                        return 1
-                    fi
-
-                    # @alias requires a value
-                    if [[ -z "$value" ]]; then
-                        echo "error: @alias annotation requires a value"
-                        return 1
-                    fi
-
-                    # Alias must be a valid identifier
-                    if ! [[ "$value" =~ $_ARGIVO_REGEX_IDENTIFIER ]]; then
-                        echo "error: invalid @alias syntax"
-                        return 1
-                    fi
-
-                    # Reversed command aliases like "-h" cannot be used
-                    if [[ "$value" == "h" ]]; then
-                        echo "error: reserved command alias: $value"
-                        return 1
-                    fi
-
-                    # Alias must not collide with a command name
-                    if [[ -n "${_ARGIVO_COMMANDS[$value]:-}" ]]; then
-                        echo "error: alias conflicts with command name: $value"
-                        return 1
-                    fi
-
-                    # @alias cannot be used twice at the same function
-                    if [[ -n "${annotations[$annotation]:-}" ]]; then
-                        echo "error: duplicate @$annotation annotation"
-                        return 1
-                    fi
-
-                    annotations["$annotation"]=1
-
-                    # Alias must be unique
-                    if [[ -n "${aliases[$value]:-}" ]]; then
-                        echo "error: duplicate alias: $value"
-                        return 1
-                    fi
-
-                    aliases["$value"]=1
                     alias="$value"
+
+                    # Check @alias requirements
+                    _argivo::validate_declaration_section "$annotation" "$is_function_section" false || return 1
+                    _argivo::validate_required_value "$annotation" "$value" || return 1
+                    _argivo::validate_value_syntax "$annotation" "$value" "$_ARGIVO_REGEX_IDENTIFIER" || return 1
+                    _argivo::validate_name_not_reserved "$value" h || return 1
+                    _argivo::validate_value_not_registered _ARGIVO_COMMANDS "$value" || return 1
+                    _argivo::register_unique_value annotations "$annotation" || return 1
+                    _argivo::register_unique_value aliases "$value" || return 1
                 ;;
 
                 hidden)
-                    is_directive_section=false
-                    pending_annotations=true
-
-                    # Annotations must be declared outside functions
-                    if [[ "$is_function_section" == true ]]; then
-                        echo "error: @hidden cannot appear inside a function"
-                        return 1
-                    fi
-
-                    # @hidden does not require a value
-                    if [[ -n "$value" ]]; then
-                        echo "error: @hidden annotation should not have a value"
-                        return 1
-                    fi
-
-                    # @hidden cannot be used twice at the same function
-                    if [[ -n "${annotations[$annotation]:-}" ]]; then
-                        echo "error: duplicate @$annotation annotation"
-                        return 1
-                    fi
-
-                    annotations["$annotation"]=1
-
-                    # Used to check that the main function
-                    # does not use @hidden
                     hidden=true
+
+                    # Check @hidden requirements
+                    _argivo::validate_declaration_section "$annotation" "$is_function_section" false || return 1
+                    _argivo::validate_forbidden_value "$annotation" "$value" || return 1
+                    _argivo::register_unique_value annotations "$annotation" || return 1
                 ;;
 
                 example)
-                    is_directive_section=false
-                    pending_annotations=true
-
-                    # Annotations must be declared outside functions
-                    if [[ "$is_function_section" == true ]]; then
-                        echo "error: @example cannot appear inside a function"
-                        return 1
-                    fi
-
-                    # @example requires a value
-                    if [[ -z "$value" ]]; then
-                        echo "error: @example annotation requires a value"
-                        return 1
-                    fi
+                    # Check @example requirements
+                    _argivo::validate_declaration_section "$annotation" "$is_function_section" false || return 1
+                    _argivo::validate_required_value "$annotation" "$value" || return 1
                 ;;
 
                 excl)
-                    is_directive_section=false
-                    pending_annotations=true
-
-                    # Annotations must be declared outside functions
-                    if [[ "$is_function_section" == true ]]; then
-                        echo "error: @excl cannot appear inside a function"
-                        return 1
-                    fi
-
-                    # @excl requires a value
-                    if [[ -z "$value" ]]; then
-                        echo "error: @excl annotation requires a value"
-                        return 1
-                    fi
-
-                    # Validate syntax
-                    if ! [[ "$value" =~ $_ARGIVO_REGEX_IDENTIFIER_LIST ]]; then
-                        echo "error: invalid @excl syntax"
-                        return 1
-                    fi
-
-                    # @excl cannot be used twice at the same function
-                    if [[ -n "${annotations[$annotation]:-}" ]]; then
-                        echo "error: duplicate @$annotation annotation"
-                        return 1
-                    fi
-
-                    annotations["$annotation"]=1
-
-                    local group
-
-                    # Check for duplicate exclusion groups within the same function
-                    for group in $value; do
-                        if [[ -n "${exclusions[$group]:-}" ]]; then
-                            echo "error: duplicate exclusion group '$group'"
-                            return 1
-                        fi
-
-                        exclusions["$group"]=1
-                    done
+                    # Check @excl requirements
+                    _argivo::validate_declaration_section "$annotation" "$is_function_section" false || return 1
+                    _argivo::validate_required_value "$annotation" "$value" || return 1
+                    _argivo::validate_value_syntax "$annotation" "$value" "$_ARGIVO_REGEX_IDENTIFIER_LIST" || return 1
+                    _argivo::register_unique_value annotations "$annotation" || return 1
+                    _argivo::register_exclusion_groups "$value" exclusions || return 1
                 ;;
 
                 req)
-                    is_directive_section=false
-                    pending_annotations=true
-
-                    # Annotations must be declared outside functions
-                    if [[ "$is_function_section" == true ]]; then
-                        echo "error: @req cannot appear inside a function"
-                        return 1
-                    fi
-
-                    # @req requires a value
-                    if [[ -z "$value" ]]; then
-                        echo "error: @req annotation requires a value"
-                        return 1
-                    fi
-
-                    # Validate syntax
-                    if ! [[ "$value" =~ $_ARGIVO_REGEX_IDENTIFIER_LIST ]]; then
-                        echo "error: invalid @req syntax"
-                        return 1
-                    fi
-
-                    # @req cannot be used twice at the same function
-                    if [[ -n "${annotations[$annotation]:-}" ]]; then
-                        echo "error: duplicate @$annotation annotation"
-                        return 1
-                    fi
-
-                    annotations["$annotation"]=1
-
-                    local required
-
-                    # Check for duplicate required commands within the same function
-                    for required in $value; do
-                        # Duplicate require
-                        if [[ -n "${requires[$required]:-}" ]]; then
-                            echo "error: duplicate require: $required"
-                            return 1
-                        fi
-
-                        # Required function does not exist
-                        if [[ -z "${_ARGIVO_COMMANDS[$required]:-}" ]]; then
-                            echo "error: unknown required command: $required"
-                            return 1
-                        fi
-
-                        requires["$required"]=1
-                    done
+                    # Check @req requirements
+                    _argivo::validate_declaration_section "$annotation" "$is_function_section" false || return 1
+                    _argivo::validate_required_value "$annotation" "$value" || return 1
+                    _argivo::validate_value_syntax "$annotation" "$value" "$_ARGIVO_REGEX_IDENTIFIER_LIST" || return 1
+                    _argivo::register_unique_value annotations "$annotation" || return 1
+                    _argivo::register_command_requirements "$value" requires || return 1
                 ;;
 
                 # The annotation or directive is not supported
@@ -584,8 +284,269 @@ function _argivo::validate_semantics() {
     return 0
 }
 
+# Check that an annotation is allowed in the current section
+function _argivo::validate_declaration_section() {
+    local name="$1"
+    local current_state="$2"
+    local expected_state="$3"
+
+    # The passed annotation can only be defined in
+    # certain parts of the Argivo script
+    if [[ "$current_state" != "$expected_state" ]]; then
+        echo "error: @$name is not allowed in this section"
+        return 1
+    fi
+
+    return 0
+}
+
+# Check that the passed annotation has a value
+function _argivo::validate_required_value() {
+    local name="$1"
+    local value="$2"
+
+    # The passed annotation requires a value
+    if [[ -z "$value" ]]; then
+        echo "error: @$name annotation requires a value"
+        return 1
+    fi
+
+    return 0
+}
+
+# Check that the passed annotation does not have a value
+function _argivo::validate_forbidden_value() {
+    local name="$1"
+    local value="$2"
+
+    # The passed annotation does not require a value
+    if [[ -n "$value" ]]; then
+        echo "error: @$name annotation should not have a value"
+        return 1
+    fi
+
+    return 0
+}
+
+# Check that the passed annotation has a valid syntax
+function _argivo::validate_value_syntax() {
+    local name="$1"
+    local value="$2"
+    local regex="$3"
+
+    # Annotations and directives must conform
+    # to their expected syntax
+    if ! [[ "$value" =~ $regex ]]; then
+        echo "error: invalid @$name syntax"
+        return 1
+    fi
+
+    return 0
+}
+
+# Validate an Argivo directive value
+function _argivo::validate_directive_value() {
+    local annotation="$1"
+    local directive="$2"
+    local value="$3"
+
+    case "$directive" in
+        check)
+            # Check @argivo check requirements
+            _argivo::validate_value_syntax "$annotation $directive" "$value" "$_ARGIVO_REGEX_BOOLEAN" || return 1
+        ;;
+
+        version)
+            # Check @argivo version requirements
+            _argivo::validate_value_syntax "$annotation $directive" "$value" "$_ARGIVO_REGEX_VERSION" || return 1
+            _argivo::validate_version_compatibility "$value" || return 1
+        ;;
+
+        *)
+            echo "error: unsupported @$annotation directive: $directive"
+            return 1
+        ;;
+    esac
+
+    return 0
+}
+
+# Check that the required Argivo version is compatible
+function _argivo::validate_version_compatibility() {
+    local required_version="$1"
+
+    # Get the required and current major version
+    local required_major="${required_version%%.*}"
+    local current_major="${_ARGIVO_VERSION%%.*}"
+
+    # Compatibility requires the script and interpreter
+    # to share the same major version
+    if [[ "$required_major" != "$current_major" ]]; then
+        echo "error: this script requires Argivo $required_major.x.x (current: $_ARGIVO_VERSION)"
+        return 1
+    fi
+
+    return 0
+}
+
+# Check annotations that are not allowed on the main function
+function _argivo::validate_main_function_annotations() {
+    local function_name="$1"
+    local -n required="$2"
+    local -n excluded="$3"
+    local hidden="$4"
+    local alias="$5"
+
+    # These requirements are only applied on the main function
+    if [[ "$function_name" == "main" ]]; then
+        if [[ -n "${required[*]}" || -n "${excluded[*]}" || "$hidden" == true || -n "$alias" ]]; then
+            echo "error: main function cannot use @alias, @req, @excl or @hidden"
+            return 1
+        fi
+    fi
+
+    return 0
+}
+
+# Check that a name is not reserved
+function _argivo::validate_name_not_reserved() {
+    local name="$1"
+    shift
+
+    local reserved
+
+    # The list of passed values must not have any reserved
+    # name used by the Argivo interpreter
+    for reserved in "$@"; do
+        if [[ "$name" == "$reserved" ]]; then
+            echo "error: reserved name: $name"
+            return 1
+        fi
+    done
+
+    return 0
+}
+
+# Check that the passed parameter type is supported
+function _argivo::validate_parameter_type() {
+    local value="$1"
+
+    if [[ "$value" =~ $_ARGIVO_REGEX_PARAM_TYPE ]]; then
+        local type="${BASH_REMATCH[1]}"
+        local validator="argivo::is_$type"
+
+        # There must be a public function associated
+        # with the passed parameter type
+        if ! declare -F "$validator" >/dev/null; then
+            echo "error: unknown parameter type: $type"
+            return 1
+        fi
+    fi
+
+    return 0
+}
+
+# Check that the default value is valid for its type
+function _argivo::validate_parameter_default() {
+    local value="$1"
+    local parameter="$2"
+
+    if [[ "$value" =~ $_ARGIVO_REGEX_PARAM_DEFAULT ]]; then
+        local default="${BASH_REMATCH[1]}"
+
+        if [[ "$value" =~ $_ARGIVO_REGEX_PARAM_TYPE ]]; then
+            local type="${BASH_REMATCH[1]}"
+            local validator="argivo::is_$type"
+
+            # The default value must be valid for the
+            # parameter's declared type
+            if ! "$validator" "$default"; then
+                echo "error: invalid default value '$default' for parameter '$parameter'"
+                return 1
+            fi
+        fi
+    fi
+
+    return 0
+}
+
+# Check that a value is not registered in an associative array
+function _argivo::validate_value_not_registered() {
+    local registry_name="$1"
+    local -n registry="$registry_name"
+    local value="$2"
+
+    # Values must be unique within their registry
+    if [[ -n "${registry[$value]:-}" ]]; then
+        echo "error: value '$value' is already registered"
+        return 1
+    fi
+
+    return 0
+}
+
+# Check that a value is registered in an associative array
+function _argivo::validate_value_registered() {
+    local registry_name="$1"
+    local -n registry="$registry_name"
+    local value="$2"
+
+    # The value must already exist in the registry
+    if [[ -z "${registry[$value]:-}" ]]; then
+        echo "error: value '$value' is not registered"
+        return 1
+    fi
+
+    return 0
+}
+
+# Register a unique value in an associative array
+function _argivo::register_unique_value() {
+    local registry_name="$1"
+    local -n registry="$registry_name"
+    local key="$2"
+
+    # Ensure the key has not already been registered
+    _argivo::validate_value_not_registered "$registry_name" "$key" || return 1
+
+    # Store the key in the registry
+    registry["$key"]=1
+    return 0
+}
+
+# Register exclusion groups and reject duplicate declarations
+function _argivo::register_exclusion_groups() {
+    local value="$1"
+    local registry_name="$2"
+
+    local group
+
+    # Register each exclusion group while enforcing uniqueness
+    for group in $value; do
+        _argivo::register_unique_value "$registry_name" "$group" || return 1
+    done
+
+    return 0
+}
+
+# Register command requirements and validate their existence
+function _argivo::register_command_requirements() {
+    local value="$1"
+    local registry_name="$2"
+
+    local required
+
+    # Register each requirement after confirming the command exists
+    for required in $value; do
+        _argivo::validate_value_registered _ARGIVO_COMMANDS "$required" || return 1
+        _argivo::register_unique_value "$registry_name" "$required" || return 1
+    done
+
+    return 0
+}
+
 # Check that command dependencies do not contain cycles
-function _argivo::validate_dependencies() {
+function _argivo::validate_command_dependencies() {
     local -A dependency_count=()
     local -A dependent_commands=()
     local -a ready_commands=()

@@ -37,11 +37,10 @@ declare -A _ARGIVO_PARAM_OPTIONAL
 declare -A _ARGIVO_PARAM_DESCRIPTIONS
 
 # Parse the script and populate the internal metadata
+# shellcheck disable=SC2034
 function _argivo::parse_script() {
     # The script should only need to be parsed once
     $_ARGIVO_SCRIPT_PARSED && return 0
-
-    local line
 
     # Flags to control the code sections
     local is_directive_section=true
@@ -73,6 +72,8 @@ function _argivo::parse_script() {
     local -A curr_param_defaults=()
     local -A curr_param_optional=()
 
+    local line
+
     # shellcheck disable=SC2154
     while IFS= read -r line; do
         # Empty or blank lines should not be considered
@@ -80,36 +81,16 @@ function _argivo::parse_script() {
 
         # Waiting for the opening brace of a function declaration
         if [[ "$waiting_for_open_brace" == true ]]; then
-            # The first non-blank line must be the opening brace
-            if [[ "$line" =~ $_ARGIVO_REGEX_OPEN_BRACE ]]; then
-                waiting_for_open_brace=false
-                brace_depth=1
-                continue
-            fi
-
-            # Treat it as an invalid function definition
-            waiting_for_open_brace=false
+            _argivo::consume_open_brace "$line" waiting_for_open_brace brace_depth && continue
             is_function_section=false
         fi
 
-        # Update function brace depth to only load annotations
-        # that appear before a function declaration and ignore
-        # annotations inside function bodies
-        if [[ "$is_function_section" == true ]]; then
-            _argivo::update_brace_depth "$line"
-
-            # The function body has ended once the
-            # brace depth reaches zero
-            if (( brace_depth == 0 )); then
-                is_function_section=false
-            fi
-        fi
+        # Update brace depth and detect when the current function body ends
+        _argivo::update_function_section "$line" is_function_section brace_depth
 
         # Check for directives in the form of:
         # @argivo key=value
         if [[ "$line" =~ $_ARGIVO_REGEX_DIRECTIVE ]]; then
-            # Directives can only be used before the first
-            # annotation or function declaration
             if [[ "$is_directive_section" == true ]]; then
                 local directive_key="${BASH_REMATCH[1]}"
                 local directive_value="${BASH_REMATCH[2]}"
@@ -255,32 +236,16 @@ function _argivo::parse_script() {
             continue
         fi
 
-        local function_name=""
-
-        # Check for function definitions that use the "function" keyword
-        if [[ "$line" =~ $_ARGIVO_REGEX_FUNCTION_1 ]]; then
-            is_directive_section=false
-            function_name="${BASH_REMATCH[1]}"
-
-        # Check for function definitions that do not use the "function" keyword
-        elif [[ -z "$function_name" ]] && [[ "$line" =~ $_ARGIVO_REGEX_FUNCTION_2 ]]; then
-            is_directive_section=false
-            function_name="${BASH_REMATCH[1]}"
-        fi
+        # shellcheck disable=SC2155
+        local function_name="$(_argivo::get_function_name "$line")"
 
         # Associate the collected description and parameters
         # of the current function with its name, if we found a function definition
         if [[ -n "$function_name" ]]; then
-            # Annotations must not be used inside the function
-            is_function_section=true
-            brace_depth=0
+            is_directive_section=false
 
-            # The opening brace may appear on the next non-blank line
-            if [[ "$line" == *"{"* ]]; then
-                brace_depth=1
-            else
-                waiting_for_open_brace=true
-            fi
+            # Initialize function body tracking
+            _argivo::start_function_section "$line" is_function_section waiting_for_open_brace brace_depth
 
             # Store the function name for future checks
             _ARGIVO_COMMANDS["$function_name"]=1
@@ -296,14 +261,12 @@ function _argivo::parse_script() {
 
             # Function description
             elif [[ -n "$curr_descr" ]]; then
-                # shellcheck disable=SC2034
                 _ARGIVO_DESCRIPTIONS["$function_name"]="$curr_descr"
                 curr_descr=""
             fi
 
             # Function parameters
             if ((${#curr_params[@]} > 0)); then
-                # shellcheck disable=SC2034
                 _ARGIVO_PARAMS["$function_name"]="${curr_params[*]}"
 
                 local param
@@ -319,26 +282,22 @@ function _argivo::parse_script() {
 
             # Function alias
             if [[ -n "${curr_alias:-}" ]]; then
-                # shellcheck disable=SC2034
                 _ARGIVO_ALIASES["$curr_alias"]="$function_name"
                 curr_alias=""
             fi
 
             # Function examples
             if ((${#curr_examples[@]} > 0)); then
-                # shellcheck disable=SC2034
                 _ARGIVO_EXAMPLES["$function_name"]="$(printf '%s\n' "${curr_examples[@]}")"
             fi
 
             # Function exclusions
             if ((${#curr_exclusions[@]} > 0)); then
-                # shellcheck disable=SC2034
                 _ARGIVO_EXCLUSIONS["$function_name"]="${curr_exclusions[*]}"
             fi
 
             # Function requires
             if ((${#curr_requires[@]} > 0)); then
-                # shellcheck disable=SC2034
                 _ARGIVO_REQUIRES["$function_name"]="${curr_requires[*]}"
             fi
 
@@ -368,6 +327,7 @@ function _argivo::parse_script() {
 function _argivo::get_commands() {
     local cmd
 
+    # Return only public commands that can be invoked directly by users
     for cmd in "${!_ARGIVO_COMMANDS[@]}"; do
         [[ "$cmd" == "main" ]] && continue
         [[ "$cmd" == _* ]] && continue
@@ -382,6 +342,7 @@ function _argivo::get_alias() {
     local function_name="$1"
     local alias
 
+    # Aliases are keyed by name, so search their values for the function
     for alias in "${!_ARGIVO_ALIASES[@]}"; do
         if [[ "${_ARGIVO_ALIASES[$alias]}" == "$function_name" ]]; then
             printf '%s\n' "$alias"
@@ -399,6 +360,7 @@ function _argivo::get_exclusions() {
     local function_name
     local exclusion
 
+    # Collect exclusion groups in a set to remove duplicates across functions
     for function_name in "${!_ARGIVO_EXCLUSIONS[@]}"; do
         for exclusion in ${_ARGIVO_EXCLUSIONS[$function_name]}; do
             exclusions["$exclusion"]=1
@@ -414,57 +376,10 @@ function _argivo::get_requires() {
 
     local function_name
 
+    # Collect commands that declare at least one requirement
     for function_name in "${!_ARGIVO_REQUIRES[@]}"; do
         requires["$function_name"]=1
     done
 
     printf '%s\n' "${!requires[@]}" | sort
-}
-
-# Update the current function brace depth while ignoring braces
-# that appear inside quoted strings or comments
-function _argivo::update_brace_depth() {
-    local line="$1"
-    local i c
-    local in_single=false
-    local in_double=false
-    local escaped=false
-
-    for ((i=0; i<${#line}; i++)); do
-        c="${line:i:1}"
-
-        # Ignore everything inside single-quoted strings
-        if $in_single; then
-            [[ "$c" == "'" ]] && in_single=false
-            continue
-        fi
-
-        # Ignore everything inside double-quoted strings,
-        # taking escaped characters into account
-        if $in_double; then
-            if $escaped; then
-                escaped=false
-                continue
-            fi
-
-            # Track escape sequences and detect the closing quote
-            case "$c" in
-                \\)  escaped=true    ;;
-                '"') in_double=false ;;
-            esac
-
-            continue
-        fi
-
-        # Ignore the rest of the line after a comment begins
-        [[ "$c" == "#" ]] && break
-
-        # Handle quote delimiters and update the brace depth
-        case "$c" in
-            "'") in_single=true     ;;
-            '"') in_double=true     ;;
-            "{") ((brace_depth++))  ;;
-            "}") ((brace_depth--))  ;;
-        esac
-    done
 }

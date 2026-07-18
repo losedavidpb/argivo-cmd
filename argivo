@@ -93,6 +93,9 @@ case "$1" in
         source "$_argivo_private_lib/syntax.bash"
 
         # shellcheck source=/dev/null
+        source "$_argivo_private_lib/scanner.bash"
+
+        # shellcheck source=/dev/null
         source "$_argivo_private_lib/parser.bash"
 
         # Parse script before checking the script
@@ -122,6 +125,9 @@ fi
 
 # shellcheck source=/dev/null
 source "$_argivo_private_lib/syntax.bash"
+
+# shellcheck source=/dev/null
+source "$_argivo_private_lib/scanner.bash"
 
 # shellcheck source=/dev/null
 source "$_argivo_private_lib/parser.bash"
