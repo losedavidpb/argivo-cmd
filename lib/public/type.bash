@@ -4,6 +4,33 @@
 
 set -Eeuo pipefail
 
+# Check whether a value is of a specific type
+# Usage: argivo::is_type <value> <type>
+function argivo::is_type() {
+    (($# == 2)) || return 1
+
+    argivo::_is_valid_type "$2" || return 1
+
+    # Use the appropriate validator function
+    # for the specified type
+    local validator="argivo::is_$2"
+    "$validator" "$1"
+}
+
+# Check whether a type is valid
+function argivo::_is_valid_type() {
+    (($# == 1)) || return 1
+
+    # Only allow safe type names
+    [[ $1 =~ ^[a-z][a-z0-9_]*$ ]] || return 1
+
+    # Prevent argivo::is_type from being treated
+    # as the validator for a type named "type"
+    [[ $1 != "type" ]] || return 1
+
+    declare -F "argivo::is_$1" >/dev/null
+}
+
 # Check whether a value is text
 # Usage: argivo::is_text <value>
 function argivo::is_text() {

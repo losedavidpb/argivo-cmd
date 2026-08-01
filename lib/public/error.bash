@@ -4,6 +4,14 @@
 
 set -Eeuo pipefail
 
+# Show an error message and return with an error
+# Usage: argivo::show_error <message>
+function argivo::show_error() {
+    (($# >= 1)) || return 1
+    printf 'error: %s\n' "$*" >&2
+    return 1
+}
+
 # Show an error message and exit with an error
 # Usage: argivo::error <message>
 function argivo::error() {
