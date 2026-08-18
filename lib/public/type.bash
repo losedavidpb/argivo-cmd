@@ -9,7 +9,8 @@ set -Eeuo pipefail
 function argivo::is_type() {
     (($# == 2)) || return 1
 
-    argivo::_is_valid_type "$2" || return 1
+    # Check that the provided type is supported
+    argivo::is_valid_type "$2" || return 1
 
     # Use the appropriate validator function
     # for the specified type
@@ -18,7 +19,8 @@ function argivo::is_type() {
 }
 
 # Check whether a type is valid
-function argivo::_is_valid_type() {
+# Usage: argivo::is_valid_type <type>
+function argivo::is_valid_type() {
     (($# == 1)) || return 1
 
     # Only allow safe type names
@@ -43,6 +45,27 @@ function argivo::is_text() {
 function argivo::is_number() {
     (($# == 1)) || return 1
     [[ "$1" =~ ^-?[0-9]+([.][0-9]+)?$ ]]
+}
+
+# Check whether a value is a natural number
+# Usage: argivo::is_natural <value>
+function argivo::is_natural() {
+    (($# == 1)) || return 1
+    [[ "$1" =~ ^[0-9]+$ ]]
+}
+
+# Check whether a value is an integer
+# Usage: argivo::is_integer <value>
+function argivo::is_integer() {
+    (($# == 1)) || return 1
+    [[ "$1" =~ ^-?[0-9]+$ ]]
+}
+
+# Check whether a value is a float
+# Usage: argivo::is_float <value>
+function argivo::is_float() {
+    (($# == 1)) || return 1
+    [[ "$1" =~ ^-?[0-9]+\.[0-9]+$ ]]
 }
 
 # Check whether a value is a boolean

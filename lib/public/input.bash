@@ -14,7 +14,7 @@ function argivo::prompt() {
 
     # Check that the provided type is supported
     if (($# >= 2)); then
-        if ! argivo::_is_valid_type "$2"; then
+        if ! argivo::is_valid_type "$2"; then
             printf 'error: unknown input type: %s\n' "$2" >&2
             return 1
         fi
